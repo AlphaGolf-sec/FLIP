@@ -5,6 +5,7 @@
 ![Versione](https://img.shields.io/badge/versione-v0.6.0%20AURA%20Edition-FF7A18?style=flat-square)
 ![Piattaforma](https://img.shields.io/badge/Windows-10%20%2F%2011%20x64-1A1C23?style=flat-square)
 [![Licenza](https://img.shields.io/badge/licenza-GPL--3.0--only-2ECC71?style=flat-square)](LICENSE)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-Support-FFDD00?style=flat-square&logo=buymeacoffee&logoColor=000000)](https://www.buymeacoffee.com/1berimHY9M)
 
 FLIP è un convertitore locale per Windows. Trascina uno o più file da Esplora file o dal Desktop, premi **Freccia giù** (o il tasto configurato) e rilascia sul formato desiderato nella ruota. Per impostazione predefinita, FLIP salva la copia convertita accanto all'originale.
 
@@ -57,7 +58,7 @@ dotnet run --project src/Flip/Flip.csproj -c Release --no-build -- --test-conver
 
 ## Supporto
 
-Se FLIP ti fa risparmiare tempo, puoi [offrirmi un caffè](https://www.buymeacoffee.com/1berimHY9M).
+<a href="https://www.buymeacoffee.com/1berimHY9M"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" height="44" alt="Offrimi un caffè"></a>
 
 ## Licenza
 
