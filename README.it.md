@@ -1,81 +1,64 @@
-# Flip — Guida in Italiano
+[English](README.md) · **Italiano**
 
-Converti qualsiasi file direttamente da Esplora file. Trascinalo, premi **Freccia giù**, e rilascialo sul formato desiderato nella ruota. Flip salverà una nuova copia convertita accanto all'originale, senza mai sovrascriverla.
+# FLIP v0.6.0 — AURA Edition
 
-Flip è un convertitore locale per Windows x64. La versione attuale è la **0.5.0-beta.1**.
+![Versione](https://img.shields.io/badge/versione-v0.6.0%20AURA%20Edition-FF7A18?style=flat-square)
+![Piattaforma](https://img.shields.io/badge/Windows-10%20%2F%2011%20x64-1A1C23?style=flat-square)
+[![Licenza](https://img.shields.io/badge/licenza-GPL--3.0--only-2ECC71?style=flat-square)](LICENSE)
 
----
+FLIP è un convertitore locale per Windows. Trascina uno o più file da Esplora file o dal Desktop, premi **Freccia giù** (o il tasto configurato) e rilascia sul formato desiderato nella ruota. Per impostazione predefinita, FLIP salva la copia convertita accanto all'originale.
 
-## 🌟 Novità della versione 0.5.0-beta.1
+![Ruota di conversione di FLIP](docs/assets/wheel.png)
 
-- 🎬 **Conversioni Audio & Video (con FFmpeg)**:
-  - Formati audio: `MP3`, `WAV`, `FLAC`, `OGG`, `M4A`, `AAC`.
-  - Formati video: `MP4`, `MKV`, `WEBM`, `AVI`, `MOV`.
-  - **Estrazione rapida della traccia audio**: trascina un file video (es. MP4) sulla ruota e rilascialo su `MP3` o `WAV` per estrarre istantaneamente l'audio.
-- 📊 **Dati strutturati nativi (senza dipendenze esterne)**:
-  - Conversione bidirezionale tra `JSON`, `YAML`, `XML`, `CSV`.
-  - Esportazione diretta in `PDF`, `HTML`, `Markdown` e `TXT`.
-- ⏱️ **Barra di caricamento radiale animata**:
-  - La ruota rimane aperta durante le conversioni più lunghe (es. video o documenti pesanti), visualizzando un arco di avanzamento circolare, un raggio rotante e la percentuale in tempo reale, con una spunta verde finale al completamento.
-  - È possibile annullare la conversione in qualsiasi momento premendo **Esc**.
-- 🔔 **Verifica aggiornamenti integrata**:
-  - Tasto destro sull'icona di Flip nell'area di notifica $\rightarrow$ *"Verifica aggiornamenti su GitHub…"* per controllare istantaneamente la presenza di nuove release.
-- 🔊 **Feedback sonoro tattile migliorato**:
-  - Ripristinato il ticchettio secco originale della ruota con riproduzione nativa WASAPI/Media Foundation, compatibile con tutti gli output audio (cuffie Bluetooth, USB, monitor HDMI).
+[Video dimostrativo](docs/assets/flip-demo.mp4) · [Note di rilascio della v0.6.0](https://github.com/thetinyfoundry/FLIP/releases/tag/v0.6.0) · [Registro delle modifiche](CHANGELOG.md) · [Guida Windows](docs/WINDOWS-INSTALL.md)
 
----
+## Installa o aggiorna alla v0.6.0
 
-## Scarica e installa
+1. Installa il [.NET 10 Windows Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/10.0) su Windows 10 o 11 x64.
+2. Scarica [`Flip-0.6.0-win-x64.zip`](https://github.com/thetinyfoundry/FLIP/releases/download/v0.6.0/Flip-0.6.0-win-x64.zip) dalla [release v0.6.0](https://github.com/thetinyfoundry/FLIP/releases/tag/v0.6.0) ed estrai tutto l'archivio.
+3. Chiudi FLIP ed esegui `Installa-FLIP.cmd` dalla cartella estratta. Il programma di installazione verifica il pacchetto e lo copia in `%LOCALAPPDATA%\Programs\Flip`.
 
-**[Scarica FLIP 0.5.0-beta.1 per Windows x64 (ZIP)](https://github.com/thetinyfoundry/FLIP/releases/download/v0.5.0-beta.1/Flip-0.5.0-beta.1-win-x64.zip)** · [Note di rilascio e checksum SHA256](https://github.com/thetinyfoundry/FLIP/releases/tag/v0.5.0-beta.1)
+**Usi già FLIP? Aggiorna tutti i file dell'app alla v0.6.0.** Avvia il programma di installazione dal nuovo archivio. Per un'installazione manuale, sostituisci l'intera cartella dell'app con il contenuto della nuova cartella `payload`. Tieni documenti e impostazioni separati dalla cartella dell'app.
 
-1. Scarica l'archivio ZIP da [GitHub Releases](https://github.com/thetinyfoundry/FLIP/releases) ed estrailo in una cartella.
-2. Installa il [.NET 10 Windows Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/10.0) se non è già presente sul sistema.
-3. Fai doppio clic su `Install-FLIP.cmd` oppure tasto destro su `Install.ps1` → **Esegui con PowerShell**. L'app viene installata in `%LOCALAPPDATA%\Programs\Flip` e si avvia automaticamente.
+Per disinstallare FLIP, esegui `Disinstalla-FLIP.cmd` dal pacchetto estratto.
 
-### Motori aggiuntivi facoltativi:
-- **Audio & Video (FFmpeg)**: Flip rileva automaticamente FFmpeg se installato nel sistema (ad esempio tramite `winget install Gyan.FFmpeg`), presente nel PATH, o posizionato in `%LOCALAPPDATA%\Flip\tools\ffmpeg.exe` (oppure `%LOCALAPPDATA%\Programs\Flip\tools\ffmpeg.exe`).
-- **Documenti avanzati (Pandoc & LibreOffice)**: chiudi Flip ed esegui `Install-DocumentEngine.ps1` per scaricare automaticamente l'eseguibile ufficiale di Pandoc verificandone l'hash SHA256. LibreOffice gestisce il rendering; i file DOCX, ODT e RTF vengono convertiti direttamente da LibreOffice a PDF, preservando fedelmente le dimensioni originali di pagina (A4 o Letter), margini, tabelle e impaginazione senza passare da Pandoc.
+## Novità di AURA Edition
 
----
+- **Aura ai bordi dello schermo e ruota radiale.** La ruota segue il cursore tra i monitor. Premi **Tab** o usa la rotellina per passare dai formati agli strumenti rapidi. Una selezione mista si può suddividere per tipo di file.
+- **Anteprima rapida.** Premi **Spazio** durante il trascinamento. Esplora i modelli 3D con vista orbitale e tavola a quattro viste, consulta la palette delle immagini e visualizza testo e forme d'onda.
+- **Strumenti rapidi.** Ritaglia, ruota, ridimensiona, sfoca aree sensibili, unisci PDF, rimuovi sfondi, estrai testo con OCR e raccogli i risultati in un archivio ZIP.
+- **PDF per l'archiviazione e trascrizione senza connessione.** Converti i file compatibili in PDF/A-2b. Con il motore facoltativo Whisper puoi trascrivere audio e video in TXT o SRT sul tuo PC.
+- **Impostazioni e accessibilità.** Dall'Hub puoi configurare la ruota, le destinazioni, i motori facoltativi, le cartelle monitorate e le ricette. Chi usa un dispositivo Tobii può abilitare la selezione con lo sguardo.
 
-## Come usare la ruota
+## Formati e motori
 
-1. Seleziona uno o più file in Esplora file o sul Desktop.
-2. Inizia a trascinare e premi **Freccia giù** (o il tasto configurato nelle Impostazioni). Quando la ruota compare puoi rilasciare il tasto.
-3. Porta il cursore sul settore del formato desiderato e rilascia il pulsante del mouse.
-4. Per annullare prima del rilascio, rilascia il file fuori dalla ruota oppure premi **Esc**.
+| Categoria | Esempi | Motore |
+| --- | --- | --- |
+| Immagini | PNG, JPEG, WebP, BMP, TIFF, GIF, ICO | Integrato |
+| PDF e documenti | PDF/A-2b, pagine PDF come immagini, estrazione testo, DOCX, ODT, Markdown | Integrato, Pandoc o LibreOffice secondo la conversione |
+| Dati strutturati | JSON, JSONL, YAML, TOML, XML, CSV, TSV, INI, XLSX | Integrato |
+| 3D e vettoriale | OBJ, FBX, STL, PLY, GLB, GLTF, 3MF, DAE, SVG, DXF | Integrato |
+| Archivi | ZIP, TAR, GZ, TGZ, CBZ, 7Z | Integrato |
+| Audio e video | MP3, WAV, FLAC, MP4, MKV, WebM, trascrizioni TXT e SRT | FFmpeg, supporto multimediale di Windows o Whisper secondo la conversione |
 
-Tasto destro sull'icona vicino all'orologio $\rightarrow$ **Impostazioni…**: apre l'**Hub unificato di Flip**, dove puoi gestire in un'unica interfaccia:
-- **Generale**: avvio automatico con Windows, integrazione menu contestuale ("Converti con Flip"), selezione lingua.
-- **Ruota & Scorciatoia**: tasto di attivazione (frecce, barra spaziatrice o registrazione tasto singolo) e attivazione del gesto radiale.
-- **Feedback Audio**: suono del tick meccanico al cambio settore e prova dal vivo.
-- **Motori di Conversione**: stato in tempo reale e percorsi di FFmpeg, LibreOffice e Pandoc con pulsante di aggiornamento rapido.
-- **Informazioni**: verifica aggiornamenti ufficiali su GitHub in tempo reale, diagnostica e cartelle locali.
+I formati di uscita dipendono dai file selezionati e dai motori installati. La conversione avviene sul tuo PC. FLIP elabora i file in una cartella temporanea e salva i risultati nella destinazione configurata.
 
----
+## Compilazione da sorgente
 
-## Tabella formati supportati
+Installa il [.NET 10 SDK x64](https://dotnet.microsoft.com/download/dotnet/10.0).
 
-| Categoria | Formati in ingresso | Formati in uscita | Motore |
-| --- | --- | --- | --- |
-| **Immagini** | PNG, JPG/JPEG, WebP, BMP, TIFF, GIF | PNG, JPG, WebP, PDF, BMP, TIFF, GIF | Nativo (SkiaSharp) |
-| **Dati strutturati** | JSON, YAML/YML, XML, CSV | JSON, YAML, XML, CSV, TXT, HTML, Markdown, PDF | Nativo incorporato |
-| **Audio** | MP3, WAV, FLAC, OGG, M4A, AAC, WMA, OPUS | WAV, MP3, FLAC, OGG, M4A, AAC | FFmpeg locale |
-| **Video** | MP4, MKV, WebM, AVI, MOV, WMV, M4V | MP4, MKV, WebM, AVI, MOV, oltre ad estrazione audio MP3/WAV | FFmpeg locale |
-| **Testo semplice** | TXT | PDF, PNG, JPG, WebP; con Pandoc anche DOCX, EPUB, Markdown, HTML, ODT, RTF, FB2, RST | Nativo / Pandoc |
-| **Documenti** | Markdown, HTML, DOCX, EPUB, ODT, RTF, FB2, RST | Altri formati documento con Pandoc; PDF/immagini richiedono LibreOffice | Pandoc / LibreOffice |
-| **PDF** | PDF | Pagine singole in PNG/JPG/WebP e testo estratto in TXT; formati documento con Pandoc | Nativo / Pandoc |
+```powershell
+dotnet build src/Flip/Flip.csproj -c Release -warnaserror
+dotnet run --project src/Flip/Flip.csproj -c Release --no-build -- --test-input
+dotnet run --project src/Flip/Flip.csproj -c Release --no-build -- --test-conversions
+```
 
----
+[Architettura](ARCHITECTURE.md) · [Come contribuire](CONTRIBUTING.md)
 
-## Privacy e sicurezza locale
+## Supporto
 
-Tutte le conversioni avvengono **al 100% in locale** sul tuo computer: nessun dato, testo o file viene inviato su server esterni o servizi cloud.
-Flip non sovrascrive mai i file esistenti (aggiunge `.converted` e un progressivo numerico se necessario).
+Se FLIP ti fa risparmiare tempo, puoi [offrirmi un caffè](https://www.buymeacoffee.com/1berimHY9M).
 
 ## Licenza
 
-Dalla v0.6.0 il codice originale e le risorse di FLIP sono distribuiti sotto licenza [GNU GPLv3](LICENSE) (`GPL-3.0-only`). Copyright © 2026 The Tiny Foundry / Raffaele Acanfora. Le licenze dei [componenti di terze parti](THIRD_PARTY_NOTICES.md) si applicano ai rispettivi componenti.
-
-[Contribuisci](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [Architettura](ARCHITECTURE.md)
+Dalla v0.6.0, il codice originale e le risorse di FLIP sono distribuiti con licenza [GNU GPLv3](LICENSE) (`GPL-3.0-only`). Copyright © 2026 The Tiny Foundry / Raffaele Acanfora. I [componenti di terze parti](THIRD_PARTY_NOTICES.md) conservano le rispettive licenze.

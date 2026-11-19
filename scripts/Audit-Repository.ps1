@@ -12,7 +12,8 @@ try{
     if($LASTEXITCODE -ne 0){throw 'Untracked source inventory failed.'}
     $badUntracked=@($untracked | Where-Object {$_ -match $forbiddenPattern})
     if($badUntracked.Count){throw ('Private files waiting to be added: '+($badUntracked -join ', '))}
-    $pattern='[A-Za-z]:[\\/]+Users[\\/]+|/Us'+'ers/|/ho'+'me/|github_pat_[A-Za-z0-9_]{15,}|gh[pousr]_[A-Za-z0-9]{20,}|sk-(proj-)?[A-Za-z0-9_-]{20,}|(AKIA|ASIA)[A-Z0-9]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|-----BEGIN (RSA |OPENSSH |EC |ENCRYPTED )?PRIVATE KEY-----'
+    # A Windows profile path must contain a username after the generic profile root.
+    $pattern='[A-Za-z]:[\\/]+[Uu]sers[\\/]+[^\\/''" ]|/Us'+'ers/|/ho'+'me/|github_pat_[A-Za-z0-9_]{15,}|gh[pousr]_[A-Za-z0-9]{20,}|sk-(proj-)?[A-Za-z0-9_-]{20,}|(AKIA|ASIA)[A-Z0-9]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|-----BEGIN (RSA |OPENSSH |EC |ENCRYPTED )?PRIVATE KEY-----'
     $scopes=@('working-tree')+@(& git rev-list --all)
     foreach($file in $untracked){
         $hits=@(& git grep --no-index -I -l -E $pattern -- $file)
