@@ -1,26 +1,87 @@
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using System.Windows;
+using Flip.Core;
 namespace Flip;
 
 internal static class Evidence
 {
     static readonly object Sync = new();
+    internal static volatile bool Enabled;
     internal static string DirectoryPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Flip", "logs");
+
     internal static void Log(string name, object? detail = null)
     {
+        if (!Enabled) return;
         try
         {
+            object? sanitizedDetail = detail is null ? null : SanitizeDetail(detail);
             lock (Sync)
             {
                 Directory.CreateDirectory(DirectoryPath);
                 string path = Path.Combine(DirectoryPath, "events.jsonl");
                 if (File.Exists(path) && new FileInfo(path).Length >= 2 * 1024 * 1024) File.Move(path, path + ".previous", true);
-                File.AppendAllText(path, JsonSerializer.Serialize(new { utc = DateTimeOffset.UtcNow, name, detail }, new JsonSerializerOptions { IncludeFields = true }) + Environment.NewLine);
+                File.AppendAllText(path, JsonSerializer.Serialize(new { utc = DateTimeOffset.UtcNow, name, detail = sanitizedDetail }, new JsonSerializerOptions { IncludeFields = true }) + Environment.NewLine);
             }
         }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
+    }
+
+    internal static string SanitizeString(string? raw)
+    {
+        if (string.IsNullOrEmpty(raw)) return "";
+        string value = raw;
+        if (value.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+            return "data:[redacted]";
+
+        string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (!string.IsNullOrWhiteSpace(userProfile))
+            value = value.Replace(userProfile, "%USERPROFILE%", StringComparison.OrdinalIgnoreCase);
+
+        value = Regex.Replace(value, @"[A-Za-z]:\\Users\\[^\\""\r\n]+", @"%USERPROFILE%", RegexOptions.IgnoreCase);
+        value = Regex.Replace(value, @"data:[a-zA-Z0-9/+.-]+;base64,[A-Za-z0-9+/=]+", "data:[redacted]", RegexOptions.IgnoreCase);
+        value = Regex.Replace(value, @"https?://[^\s""'<>]+", "[redacted-url]", RegexOptions.IgnoreCase);
+
+        if (value.Length > 200)
+            value = value[..200] + "…";
+        return value;
+    }
+
+    private static JsonNode? SanitizeDetail(object detail)
+    {
+        try
+        {
+            var node = JsonSerializer.SerializeToNode(detail, new JsonSerializerOptions { IncludeFields = true });
+            return SanitizeNode(node);
+        }
+        catch
+        {
+            return JsonValue.Create(SanitizeString(detail.ToString()));
+        }
+    }
+
+    private static JsonNode? SanitizeNode(JsonNode? node)
+    {
+        switch (node)
+        {
+            case null:
+                return null;
+            case JsonValue val when val.TryGetValue<string>(out var s):
+                return JsonValue.Create(SanitizeString(s));
+            case JsonArray arr:
+                for (int i = 0; i < arr.Count; i++)
+                    arr[i] = SanitizeNode(arr[i]);
+                return arr;
+            case JsonObject obj:
+                foreach (string key in obj.Select(kv => kv.Key).ToArray())
+                    obj[key] = SanitizeNode(obj[key]);
+                return obj;
+            default:
+                return node;
+        }
     }
 }
 internal static class Policy
@@ -54,23 +115,35 @@ internal static class Policy
     }
     internal static string AvailabilityMessage(string[] paths)
     {
-        if (paths.Length == 0) return "Trascina qui il file";
+        if (paths.Length == 0) return Loc.T("Trascina qui il file", "Drop files here");
         if (Outputs(paths).Length > 0) return "";
+        string noExt = Loc.T("senza estensione", "no extension");
         var unsupported = paths.Where(p => Outputs([p]).Length == 0)
             .Select(p => Path.GetExtension(p).TrimStart('.').ToUpperInvariant())
-            .Select(e => string.IsNullOrEmpty(e) ? "senza estensione" : e.Length > 18 ? e[..18] : e)
+            .Select(e => string.IsNullOrEmpty(e) ? noExt : e.Length > 18 ? e[..18] : e)
             .Distinct().Take(4).ToArray();
         var listed = unsupported.Length > 0 ? unsupported : paths
             .Select(p => Path.GetExtension(p).TrimStart('.').ToUpperInvariant())
-            .Select(e => string.IsNullOrEmpty(e) ? "senza estensione" : e.Length > 18 ? e[..18] : e)
+            .Select(e => string.IsNullOrEmpty(e) ? noExt : e.Length > 18 ? e[..18] : e)
             .Distinct().Take(4).ToArray();
-        return (paths.Length == 1 ? "1 file selezionato" : $"{paths.Length} file selezionati") +
-            (unsupported.Length > 0 ? "\nNon supportati: " + string.Join(", ", unsupported) : listed.Length > 0 ? "\nFormati incompatibili: " + string.Join(", ", listed) : "") +
-            "\nNessun formato comune";
+        return (paths.Length == 1
+                ? Loc.T("1 file selezionato", "1 file selected")
+                : Loc.F("{0} file selezionati", "{0} files selected", paths.Length)) +
+            (unsupported.Length > 0
+                ? "\n" + Loc.T("Non supportati: ", "Unsupported: ") + string.Join(", ", unsupported)
+                : listed.Length > 0
+                    ? "\n" + Loc.T("Formati incompatibili: ", "Incompatible formats: ") + string.Join(", ", listed)
+                    : "") +
+            "\n" + Loc.T("Nessun formato comune", "No common format");
     }
     internal static string[] ReadFiles(IDataObject data)
+        => ValidateFilePaths(RawFilePaths(data));
+
+    internal static string[] RawFilePaths(IDataObject data) =>
+        data.GetDataPresent(DataFormats.FileDrop, false) && data.GetData(DataFormats.FileDrop, false) is string[] { Length: > 0 and <= 128 } paths ? paths : [];
+
+    internal static string[] ValidateFilePaths(string[] paths)
     {
-        if (!data.GetDataPresent(DataFormats.FileDrop, false) || data.GetData(DataFormats.FileDrop, false) is not string[] paths || paths.Length is 0 or > 128) return [];
         try
         {
             foreach (var path in paths)

@@ -12,11 +12,26 @@ namespace Flip;
 
 internal static class MediaTools
 {
-    static string? FindFfmpeg(string localAppData)
+    static string? FindFfmpeg()
     {
+        string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+
+        // 1. App-relative tools folder (installed program or portable application)
         var local = Path.Combine(AppContext.BaseDirectory, "tools", "ffmpeg.exe");
         if (File.Exists(local)) return local;
 
+        // 2. User data tools folder: %LOCALAPPDATA%\Flip\tools\ffmpeg.exe
+        if (!string.IsNullOrWhiteSpace(localAppData))
+        {
+            var userTools = Path.Combine(localAppData, "Flip", "tools", "ffmpeg.exe");
+            if (File.Exists(userTools)) return userTools;
+
+            // Also check installed program tools folder if running from another location
+            var progTools = Path.Combine(localAppData, "Programs", "Flip", "tools", "ffmpeg.exe");
+            if (File.Exists(progTools)) return progTools;
+        }
+
+        // 3. Development / repo root tools folder
         for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir != null; dir = dir.Parent)
         {
             if (!File.Exists(Path.Combine(dir.FullName, "Flip.csproj"))) continue;
@@ -29,6 +44,7 @@ internal static class MediaTools
             break;
         }
 
+        // 4. PATH environment variable
         string? pathEnv = Environment.GetEnvironmentVariable("PATH");
         if (!string.IsNullOrWhiteSpace(pathEnv))
         {
@@ -43,29 +59,28 @@ internal static class MediaTools
             }
         }
 
+        // 5. WinGet standard install locations (Links or Packages)
         try
         {
-            string userTools = Path.Combine(localAppData, "Flip", "tools", "ffmpeg.exe");
-            if (File.Exists(userTools)) return userTools;
-
-            string installedTools = Path.Combine(localAppData, "Programs", "Flip", "tools", "ffmpeg.exe");
-            if (File.Exists(installedTools)) return installedTools;
-
-            string wingetLink = Path.Combine(localAppData, "Microsoft", "WinGet", "Links", "ffmpeg.exe");
-            if (File.Exists(wingetLink)) return wingetLink;
-
-            string wingetPkgs = Path.Combine(localAppData, "Microsoft", "WinGet", "Packages");
-            if (Directory.Exists(wingetPkgs))
+            if (!string.IsNullOrWhiteSpace(localAppData))
             {
-                foreach (string pkgDir in Directory.EnumerateDirectories(wingetPkgs, "*FFmpeg*", SearchOption.TopDirectoryOnly))
+                string wingetLink = Path.Combine(localAppData, "Microsoft", "WinGet", "Links", "ffmpeg.exe");
+                if (File.Exists(wingetLink)) return wingetLink;
+
+                string wingetPkgs = Path.Combine(localAppData, "Microsoft", "WinGet", "Packages");
+                if (Directory.Exists(wingetPkgs))
                 {
-                    var found = Directory.EnumerateFiles(pkgDir, "ffmpeg.exe", SearchOption.AllDirectories).FirstOrDefault();
-                    if (found != null) return found;
+                    foreach (string pkgDir in Directory.EnumerateDirectories(wingetPkgs, "*FFmpeg*", SearchOption.TopDirectoryOnly))
+                    {
+                        var found = Directory.EnumerateFiles(pkgDir, "ffmpeg.exe", SearchOption.AllDirectories).FirstOrDefault();
+                        if (found != null) return found;
+                    }
                 }
             }
         }
         catch { }
 
+        // 6. Program Files standard locations
         foreach (var root in new[] { Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86) })
         {
             if (string.IsNullOrWhiteSpace(root)) continue;
@@ -76,8 +91,9 @@ internal static class MediaTools
         return null;
     }
 
-    internal static readonly string? Ffmpeg = FindFfmpeg(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
+    internal static string? Ffmpeg { get; private set; } = FindFfmpeg();
     internal static bool HasFfmpeg => Ffmpeg != null;
+    internal static void Refresh() => Ffmpeg = FindFfmpeg();
 
     static readonly Regex DurationRegex = new(@"Duration:\s*(\d{2}):(\d{2}):(\d{2}(?:\.\d+)?)", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     static readonly Regex TimeRegex = new(@"time=(\d{2}):(\d{2}):(\d{2}(?:\.\d+)?)", RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -90,7 +106,7 @@ internal static class MediaTools
     internal static async Task Convert(string source, string target, string staged, CancellationToken token, Action<int>? onPercent = null)
     {
         if (Ffmpeg == null)
-            throw new IOException("Per convertire file audio e video serve FFmpeg installato sul computer.");
+            throw new IOException("Per convertire file audio e video serve FFmpeg. Installalo con 'winget install Gyan.FFmpeg' oppure copia ffmpeg.exe in '%LOCALAPPDATA%\\Flip\\tools\\'.");
 
         var args = new List<string> { "-y", "-nostdin", "-hide_banner", "-i", source };
         switch (target)

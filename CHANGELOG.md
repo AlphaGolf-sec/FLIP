@@ -1,5 +1,56 @@
 # Changelog
 
+Tutte le novità principali del progetto **FLIP** sono documentate in questo file.
+
+---
+
+## [0.6.0] - 2026-11-18 ("AURA Edition")
+
+### Added
+- **FLIP QuickLook (`FlipPreviewWindow`) con Spazio durante il drag**:
+  - **Viewport 3D Interattivo** (DirectX / WPF `Viewport3D`) con illuminazione studio a 3 punti, orbita quaternion senza gimbal lock, pan, zoom, overlay Wireframe arancione FLIP, vista **Blueprint a 4 Viste** (`Tab`), **Segnalibro d'Inquadratura `(A)`** (`📌 Memorizza Vista (A)` / `↺ Richiama Vista (A)` con salvataggio di orientamento, pan, zoom e stato auto-giro).
+  - **Provino Tipografico `"Aa"`** nella vista Palette `#HEX`: selezione coppia *Testo / Sfondo* con calcolo contrasto WCAG (`AAA`/`AA`), pulsante di scambio `⇄` e copia immediata `#TESTO / #SFONDO`.
+  - Anteprima universale per testo, documenti tabellari, immagini SVG/DXF/ICO e riproduzione zero-file con salvataggio esplicito tramite `Ctrl+S`.
+- **FLIP Creator Pack (`BuiltInQuickTools` & `EngineBootstrap`)**:
+  - `Turntable3DQuickTool` (`360°` GIF 720x720 24 frame con wipe wireframe), `PaletteQuickTool` (Swatch Card PNG con 6 colori dominanti `#HEX`), `WaveformQuickTool` (`1920x480` trasparente `.wav/.audio -> .png`), preset `9:16 Blur` Social in `CropQuickTool`, `PrivacyCleanQuickTool` (zero metadati EXIF/XMP) e combo `+ ARCHIVIO .ZIP` con `Z`.
+- **Conversione PDF/A-2b (`PdfEngine`, `FormatRegistry`, `RoutePlanner`, `OutputPathAllocator`)**:
+  - Generazione di file **PDF/A-2b (ISO 19005-2)** conformi con XMP `pdfaid:part=2` / `conformance=B`, `OutputIntents` `sRGB IEC61966-2.1` e supporto diretto da PDF (`_pdfa.pdf`), immagini e documenti di testo.
+- **Recupero del Batch Misto & Traccia dell'Ultima Scelta**:
+  - Pillole per gruppi omogenei (es. `[ 8 PNG ]`, `[ 2 WAV ]`, `[ 1 PDF ]`, `[ Tutti ]`) sia nell'Hub (`SettingsHubWindow`) sia sulla Ruota (`Wheel`) quando vengono selezionati o trascinati file incompatibili.
+  - Dizionario in RAM `Wheel.LastSuccessfulTargetBySourceExt` con arco indicatore ambra (`#FFB547`) sullo spicchio corrispondente (e nei `Sub-Rings`).
+- **Tutorial Interattivo Passo-Passo (`FirstRunWelcomeWindow`)**:
+  - Guida a 4 schede cliccabili (*Trascina & Rilascia* con mini-ruota interattiva e Coach-Mark, *Strumenti (Tab)* con ribaltamento animato, *QuickLook (Spazio)*, *Motori AI & Tobii*) e notifica di benvenuto nella barra di sistema al completamento.
+- **Accessibilità Tobii / Senza Mani (`GazeOrbWindow` & `GazeDwell`)**:
+  - Bollino flottante `[ F ]` auto-dock sul bordo destro (`Opacity = 0.35`, fade-in `90px` -> `1.0`), trascinabile in verticale, menu contestuale scuro e selezione a sguardo (*Dwell-to-Select*) su Ruota e QuickLook.
+- **Aura Luminosa Multi-Monitor (`ScreenEdgeAuraWindow`) & Hub Unificato (`SettingsHubWindow`)**:
+  - Aura click-through lungo i bordi del monitor attivo con impulso verde/ambra di completamento.
+  - Hub dark-theme borderless a 6 sezioni (`1. Ruota & Spicchi`, `2. Attivazione & Input`, `3. Destinazione File`, `4. Motori & GPU`, `5. Cartelle Automatiche`, `6. Cronologia & Preset`) con verifica reale su disco (`CliResolver.VerifyAndDetectEngines`) e **Installer 1-Click (`EngineInstaller`)** per tutti i 6 motori esterni (`whisper`, `pandoc`, `ffmpeg`, `tesseract`, `calibre`, `libreoffice`).
+- **Servizi di Sistema & Installer 1-Clic**:
+  - `BrowserDropService` (immagini/URL/Data-URI dal browser), `ClipboardFlipService` (`Ctrl+Shift+F`), `WatchFolderService` anti-loop.
+  - `scripts/Installa-FLIP.cmd` e `scripts/Disinstalla-FLIP.cmd` con verifica preventiva integrità `SHA256SUMS.txt` in `Install.ps1`.
+- **Motori Nativi & Formato 3D FBX**:
+  - 6 motori offline (`ImageEngine`, `PdfEngine`, `OfficeOpenXmlEngine`, `DataSerializationEngine`, `ArchiveEngine`, `Mesh3DVectorGeoEngine`) incluso supporto `.fbx` ASCII e binario (`Kaydara FBX Binary`), `RoutePlanner` con isolamento rigoroso di dominio, `OutputPathAllocator` atomico e `SettingsStore` thread-safe.
+
+### Changed
+- **Salvataggio predefinito accanto al file originale (`SameAsSource`)**: i file convertiti vengono creati nella stessa cartella dell'originale; la cartella `Downloads` funge da fallback solo per sorgenti provenienti da cartelle temporanee (`%TEMP%`, browser drop) o senza permessi di scrittura.
+- **Ridenominazione UX `"Preset & Macro"`**: aggiornate tutte le etichette UI da *"Ricetta"/"Ricette"* a *"Preset"* / *"Preset & Macro"* (mantenendo la retrocompatibilità JSON di `Recipes`/`FlipRecipe`) e collegato `StripMetadata` lungo tutta la pipeline (`ExecuteRecipeAsync`, `ImageEngine`, `PdfEngine`, `ConversionEngine`, `FfmpegEngine`, `PandocEngine`).
+- **Scansione Whisper AI "Zero-Duplicati" (`WhisperLocator`)**: ricerca limitata alle posizioni applicative standard con esclusione generica di wrapper Python (`python_embeded`, `venv`, `conda`, `Scripts\whisper.exe`) e verifica dimensione minima modello (`>= 30 MB`).
+- **GNU GPLv3**. Da questa versione, il codice originale e le risorse di FLIP sono distribuiti con licenza `GPL-3.0-only`.
+
+### Fixed
+- **Multi-Monitor, DPI misti e Tavoletta Grafica (`Native.cs`, `Wheel.cs`, `Program.cs`, `ScreenEdgeAuraWindow.cs`)**:
+  - Riposizionamento fisico sempre forzato sul monitor corrente del cursore (`PlaceNearCursor`, `OnDpiChanged` su `Wheel` con `TransformToDevice`, senza mai saltare `SetWindowPos` a `Width`/`Height` invariate).
+  - Sblocco sincrono della vecchia istanza `wheel` (`DismissWheel(false)` / `CloseImmediately`) se orfana o dopo input penna senza `WM_INPUT MouseUp`, con `watchdog` reattivo basato su `!Native.IsPrimaryMousePressed()`.
+  - Arresto immediato di `monitorTimer` in `ScreenEdgeAuraWindow.Dismiss()` / `FadeOut()` e applicazione condizionale di `SWP_SHOWWINDOW` solo se `_isActive == true`.
+- **Routing di Dominio & Sub-Rings (`RoutePlanner.cs`, `WheelLayout.cs`)**: eliminati i percorsi multi-hop lossy tra famiglie incompatibili (es. audio/testo verso immagini) e rimosse le etichette generiche `"Altri 1..5"` sostituendole con espansioni semantiche chiare.
+
+### Security & Privacy
+- **Validazione rigida buffer esterni glTF (`Mesh3DVectorGeoEngine`)**: rifiuto esplicito di URI assoluti (`http://`, `file://`, drive letter), percorsi di rete UNC, path traversal (`..` e `%2e%2e`), symlink / `ReparsePoint` su file o cartelle intermedie e limiti massimi di allocazione (`MaxGltfBufferBytes`).
+- **Audit privacy pre-rilascio**: `Evidence.Enabled` disattivato di default fuori dalle suite diagnostiche; mascheramento automatico di `%USERPROFILE%`, `data:` URI ed URL (`[redacted-url]`) con troncamento a 200 caratteri in `Evidence.SanitizeString`; `FlipPreviewWindow` limita l'output visualizzato a `fi.Name`; `SettingsStore.ExportToFile` esclude cronologia e percorsi locali personalizzati.
+- **Hardening Packaging (`Package.ps1`)**: rimozione rigorosa di `.pdb`, `.lnk`, `events.jsonl`, `logs/` e `obj/`, scansione automatica anti-leak su `Flip.dll` prima di creare l'archivio `.zip` e verifica degli hash `SHA256SUMS.txt` prima dell'installazione.
+
+---
+
 ## 0.5.1
 
 - Fix `Install.ps1` when run directly from the extracted ZIP. After installing the .NET 10 Windows Desktop Runtime x64, extract the entire ZIP, double-click `Install-FLIP.cmd`, then start FLIP from the Desktop or Start menu shortcut.
@@ -10,8 +61,8 @@
 ## 0.5.0-beta.1
 
 - Add native structured-data conversions for JSON, YAML, XML and CSV (into JSON, YAML, XML, CSV, TXT, HTML, Markdown and PDF) without external dependencies.
-- Add audio conversions (MP3, WAV, FLAC, OGG, M4A, AAC) and video conversions/audio extraction (MP4, MKV, WebM, AVI, MOV, plus MP3/WAV audio extraction) powered by local FFmpeg.
-- Keep the radial wheel open during active conversions with an animated circular progress arc, radial sweep line, live percentage counter and Escape cancellation.
+- Add audio conversions (MP3, WAV, FLAC, OGG, M4A, AAC) and video conversions/audio extraction (MP4, MKV, WebM, AVI, MOV, plus MP3 and WAV audio extraction) powered by local FFmpeg.
+- Keep the radial wheel open during long conversions with an animated circular progress arc, radial sweep line, live percentage counter and Escape cancellation.
 - Add a GitHub release update check in the tray context menu (`Verifica aggiornamenti su GitHub…`).
 
 ## 0.4.0-beta.3
@@ -21,6 +72,7 @@
 - Support dragging before the key press and holding the key before starting the drag; cancel stale ordering state and keep the wheel open after key release.
 - Keep the original wheel tick and its mute control. Do not change Windows system sounds.
 - Create Desktop/Start shortcuts and enable per-user startup by default in the installer, with `-NoShortcuts` and `-NoStartup` opt-outs.
+
 ## 0.4.0-beta.2
 
 - Replace Ctrl drag activation with `<>`; migrate old saved choices to `<>`.
@@ -31,6 +83,7 @@
 - Expand repository audit to historical filenames, new source files and commit metadata; document installation, release gates and reference products.
 
 ## 0.4.0-beta.1
+
 - Show every compatible format in a dynamic wheel, including RTF/ODT; add tested FB2/RST document conversions.
 - Restore core TXT-to-PDF/images and PDF-to-TXT without Pandoc.
 - Slightly more translucent backing, larger outer margin and an original 40 ms tic.
@@ -40,6 +93,7 @@
 - Prepare clean publication helpers, Italian README and release review; public binary release remains blocked.
 
 ## 0.3.0
+
 - Add a tray sound-test command and bounded audio-request diagnostics; retain the existing sound player after intermittent user reports.
 - Remove the extra-formats button from the wheel and center the filename/status area.
 - Optional startup at Windows sign-in, controllable from the tray menu.
@@ -51,6 +105,7 @@
 - Source publication preparation: ignore private files, document dependencies and add build CI.
 
 ## 0.2.0
+
 - Real image, PDF and document conversions with collision-safe output beside the source.
 - Batch selection and multiple output formats.
 - Right/left Ctrl gesture and swapped mouse button support.

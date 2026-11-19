@@ -223,9 +223,14 @@ internal static class ConversionEngine
     {
         if (format is "PNG" or "JPG" or "WEBP")
         {
-            using var flattened = new SKBitmap(bitmap.Width, bitmap.Height, SKColorType.Bgra8888, SKAlphaType.Opaque);
-            using (var canvas = new SKCanvas(flattened)) { canvas.Clear(SKColors.White); canvas.DrawBitmap(bitmap, 0, 0, new SKSamplingOptions()); }
-            using var image = SKImage.FromBitmap(format == "JPG" ? flattened : bitmap);
+            using var flattened = format == "JPG" ? new SKBitmap(bitmap.Width, bitmap.Height, SKColorType.Bgra8888, SKAlphaType.Opaque) : null;
+            if (flattened != null)
+            {
+                using var canvas = new SKCanvas(flattened);
+                canvas.Clear(SKColors.White);
+                canvas.DrawBitmap(bitmap, 0, 0, new SKSamplingOptions());
+            }
+            using var image = SKImage.FromBitmap(flattened ?? bitmap);
             using var encoded = image.Encode(format == "PNG" ? SKEncodedImageFormat.Png : format == "JPG" ? SKEncodedImageFormat.Jpeg : SKEncodedImageFormat.Webp, format == "PNG" ? 100 : 92)
                 ?? throw new IOException("Encoder immagine non disponibile.");
             using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None); encoded.SaveTo(stream); stream.Flush(true);
@@ -237,10 +242,12 @@ internal static class ConversionEngine
         BitmapEncoder encoder = format switch { "BMP" => new BmpBitmapEncoder(), "TIFF" => new TiffBitmapEncoder(), "GIF" => new GifBitmapEncoder(), _ => throw new IOException("Encoder non supportato: " + format) };
         encoder.Frames.Add(BitmapFrame.Create(source)); using var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None); encoder.Save(file); file.Flush(true);
     }
-    internal static void ImagePdf(SKBitmap bitmap, string path)
+    internal static void ImagePdf(SKBitmap bitmap, string path, bool stripMetadata = false)
     {
         using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-        using var document = SKDocument.CreatePdf(stream) ?? throw new IOException("Encoder PDF non disponibile.");
+        var metadata = new SKDocumentPdfMetadata { Title = "", Author = "", Subject = "", Keywords = "", Creator = "", Producer = "" };
+        using var document = (stripMetadata ? SKDocument.CreatePdf(stream, metadata) : SKDocument.CreatePdf(stream))
+            ?? throw new IOException("Encoder PDF non disponibile.");
         float width = 595, height = 842, margin = 30;
         using (var image = SKImage.FromBitmap(bitmap))
         {

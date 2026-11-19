@@ -5,12 +5,28 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using SkiaSharp;
+using Flip.Core;
 namespace Flip;
 
 internal static class ConversionTests
 {
     internal static async Task<int> Run()
     {
+        string previousLanguage = Loc.Preference;
+        Loc.SetPreference(Loc.Italian);
+        try
+        {
+            return await RunCore().ConfigureAwait(false);
+        }
+        finally
+        {
+            Loc.SetPreference(previousLanguage);
+        }
+    }
+
+    static async Task<int> RunCore()
+    {
+        Evidence.Enabled = true;
         Directory.CreateDirectory(Evidence.DirectoryPath); string root = Path.Combine(Evidence.DirectoryPath, "conversion-fixtures-" + DateTime.Now.ToString("yyyyMMdd-HHmmss")); Directory.CreateDirectory(root);
         var checks = new List<object>(); var all = new List<ConversionResult>(); var hashes = new Dictionary<string, string>(); int failed = 0;
         var officeProfilesBefore = Directory.EnumerateDirectories(Path.GetTempPath(), "Flip-LO-*").ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -75,6 +91,12 @@ internal static class ConversionTests
             var docOutputs = await Do(docx, "PDF", "MD", "HTML", "EPUB", "TXT", "RTF", "ODT");
             using (var zip = ZipFile.OpenRead(docx)) Check("DOCX ha word/document.xml", zip.GetEntry("word/document.xml") != null);
             using (var zip = ZipFile.OpenRead(epub)) Check("EPUB ha mimetype corretto", zip.GetEntry("mimetype") != null);
+            string docxPdf = docOutputs.First(p => p.EndsWith(".pdf"));
+            using (var docPdfCheck = UglyToad.PdfPig.PdfDocument.Open(docxPdf))
+            {
+                var firstPage = docPdfCheck.GetPage(1);
+                Check("DOCX → PDF pagina valida e non vuota", firstPage.Width > 400 && firstPage.Height > 500);
+            }
             string roundtrip = docOutputs.First(p => p.EndsWith(".txt")); Check("DOCX roundtrip conserva testo", File.ReadAllText(roundtrip).Contains("caffè"));
             await Do(epub, "DOCX", "TXT", "PDF"); await Do(md, "DOCX", "EPUB", "PDF", "HTML"); await Do(html, "PDF", "MD", "PNG");
             string deep = Path.Combine(root, new string('p', 48)); Directory.CreateDirectory(deep);

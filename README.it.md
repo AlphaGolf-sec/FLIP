@@ -2,16 +2,9 @@
 
 Converti qualsiasi file direttamente da Esplora file. Trascinalo, premi **Freccia giù**, e rilascialo sul formato desiderato nella ruota. Flip salverà una nuova copia convertita accanto all'originale, senza mai sovrascriverla.
 
-Flip è un convertitore locale per Windows x64. La versione attuale è la **0.5.1**.
+Flip è un convertitore locale per Windows x64. La versione attuale è la **0.5.0-beta.1**.
 
 ---
-
-## Correzioni della 0.5.1
-
-- L'installazione diretta da PowerShell funziona anche dallo ZIP estratto. Per l'installazione standard, fai doppio clic su `Install-FLIP.cmd`.
-- FLIP rileva FFmpeg nella cartella utente indicata nella guida e abilita conversioni come MP4 in MP3.
-- I PDF ottenuti da DOCX usano il formato A4.
-- Il pannello di conversione multipla spiega come aprire la ruota con il tasto configurato.
 
 ## 🌟 Novità della versione 0.5.0-beta.1
 
@@ -34,15 +27,15 @@ Flip è un convertitore locale per Windows x64. La versione attuale è la **0.5.
 
 ## Scarica e installa
 
-**[Scarica FLIP 0.5.1 per Windows x64 (ZIP)](https://github.com/thetinyfoundry/FLIP/releases/download/v0.5.1/Flip-0.5.1-win-x64.zip)** · [Note di rilascio e checksum SHA256](https://github.com/thetinyfoundry/FLIP/releases/tag/v0.5.1)
+**[Scarica FLIP 0.5.0-beta.1 per Windows x64 (ZIP)](https://github.com/thetinyfoundry/FLIP/releases/download/v0.5.0-beta.1/Flip-0.5.0-beta.1-win-x64.zip)** · [Note di rilascio e checksum SHA256](https://github.com/thetinyfoundry/FLIP/releases/tag/v0.5.0-beta.1)
 
 1. Scarica l'archivio ZIP da [GitHub Releases](https://github.com/thetinyfoundry/FLIP/releases) ed estrailo in una cartella.
 2. Installa il [.NET 10 Windows Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/10.0) se non è già presente sul sistema.
-3. Se FLIP è aperto, chiudilo dal menu dell'icona vicino all'orologio. Fai doppio clic su `Install-FLIP.cmd` nella cartella estratta. L'app si installa in `%LOCALAPPDATA%\Programs\Flip` e puoi aprirla dal collegamento sul Desktop o nel menu Start.
+3. Fai doppio clic su `Install-FLIP.cmd` oppure tasto destro su `Install.ps1` → **Esegui con PowerShell**. L'app viene installata in `%LOCALAPPDATA%\Programs\Flip` e si avvia automaticamente.
 
 ### Motori aggiuntivi facoltativi:
-- **Audio & Video (FFmpeg)**: Copia `ffmpeg.exe` in `%LOCALAPPDATA%\Flip\tools` e riavvia FLIP. FLIP rileva anche FFmpeg installato tramite WinGet o disponibile nel PATH.
-- **Documenti avanzati (Pandoc & LibreOffice)**: chiudi Flip ed esegui `Install-DocumentEngine.ps1` per scaricare automaticamente l'eseguibile ufficiale di Pandoc verificandone l'hash SHA256. LibreOffice può essere installato a parte per il rendering di PDF e formati Office.
+- **Audio & Video (FFmpeg)**: Flip rileva automaticamente FFmpeg se installato nel sistema (ad esempio tramite `winget install Gyan.FFmpeg`), presente nel PATH, o posizionato in `%LOCALAPPDATA%\Flip\tools\ffmpeg.exe` (oppure `%LOCALAPPDATA%\Programs\Flip\tools\ffmpeg.exe`).
+- **Documenti avanzati (Pandoc & LibreOffice)**: chiudi Flip ed esegui `Install-DocumentEngine.ps1` per scaricare automaticamente l'eseguibile ufficiale di Pandoc verificandone l'hash SHA256. LibreOffice gestisce il rendering; i file DOCX, ODT e RTF vengono convertiti direttamente da LibreOffice a PDF, preservando fedelmente le dimensioni originali di pagina (A4 o Letter), margini, tabelle e impaginazione senza passare da Pandoc.
 
 ---
 
@@ -53,7 +46,12 @@ Flip è un convertitore locale per Windows x64. La versione attuale è la **0.5.
 3. Porta il cursore sul settore del formato desiderato e rilascia il pulsante del mouse.
 4. Per annullare prima del rilascio, rilascia il file fuori dalla ruota oppure premi **Esc**.
 
-Tasto destro sull'icona vicino all'orologio $\rightarrow$ **Impostazioni…**: puoi personalizzare il tasto di attivazione (frecce, barra spaziatrice o qualsiasi tasto singolo della tastiera).
+Tasto destro sull'icona vicino all'orologio $\rightarrow$ **Impostazioni…**: apre l'**Hub unificato di Flip**, dove puoi gestire in un'unica interfaccia:
+- **Generale**: avvio automatico con Windows, integrazione menu contestuale ("Converti con Flip"), selezione lingua.
+- **Ruota & Scorciatoia**: tasto di attivazione (frecce, barra spaziatrice o registrazione tasto singolo) e attivazione del gesto radiale.
+- **Feedback Audio**: suono del tick meccanico al cambio settore e prova dal vivo.
+- **Motori di Conversione**: stato in tempo reale e percorsi di FFmpeg, LibreOffice e Pandoc con pulsante di aggiornamento rapido.
+- **Informazioni**: verifica aggiornamenti ufficiali su GitHub in tempo reale, diagnostica e cartelle locali.
 
 ---
 
@@ -75,5 +73,9 @@ Tasto destro sull'icona vicino all'orologio $\rightarrow$ **Impostazioni…**: p
 
 Tutte le conversioni avvengono **al 100% in locale** sul tuo computer: nessun dato, testo o file viene inviato su server esterni o servizi cloud.
 Flip non sovrascrive mai i file esistenti (aggiunge `.converted` e un progressivo numerico se necessario).
+
+## Licenza
+
+Dalla v0.6.0 il codice originale e le risorse di FLIP sono distribuiti sotto licenza [GNU GPLv3](LICENSE) (`GPL-3.0-only`). Copyright © 2026 The Tiny Foundry / Raffaele Acanfora. Le licenze dei [componenti di terze parti](THIRD_PARTY_NOTICES.md) si applicano ai rispettivi componenti.
 
 [Contribuisci](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [Architettura](ARCHITECTURE.md)

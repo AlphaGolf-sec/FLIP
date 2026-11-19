@@ -1,17 +1,26 @@
 using System.Diagnostics;
 using System.IO;
-using System.IO.Compression;
 using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
-using System.Xml.Linq;
 namespace Flip;
 
 internal static class DocumentTools
 {
     static string? FindPandoc()
     {
-        var local = Path.Combine(AppContext.BaseDirectory, "tools", "pandoc.exe"); if (File.Exists(local)) return local;
+        var local = Path.Combine(AppContext.BaseDirectory, "tools", "pandoc.exe");
+        if (File.Exists(local)) return local;
+
+        string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        if (!string.IsNullOrWhiteSpace(localAppData))
+        {
+            var userTools = Path.Combine(localAppData, "Flip", "tools", "pandoc.exe");
+            if (File.Exists(userTools)) return userTools;
+            var progTools = Path.Combine(localAppData, "Programs", "Flip", "tools", "pandoc.exe");
+            if (File.Exists(progTools)) return progTools;
+        }
+
         for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir != null; dir = dir.Parent)
         {
             if (!File.Exists(Path.Combine(dir.FullName, "Flip.csproj"))) continue;
@@ -22,11 +31,13 @@ internal static class DocumentTools
         }
         return null;
     }
-    internal static readonly string? Pandoc = FindPandoc();
-    internal static readonly string? Office = new[] { Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86) }
+    internal static string? FindOffice() => new[] { Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86) }
         .Select(p => Path.Combine(p, "LibreOffice", "program", "soffice.com")).FirstOrDefault(File.Exists);
+    internal static string? Pandoc { get; private set; } = FindPandoc();
+    internal static string? Office { get; private set; } = FindOffice();
     internal static bool HasPandoc => Pandoc != null;
     internal static bool HasOffice => Office != null;
+    internal static void Refresh() { Pandoc = FindPandoc(); Office = FindOffice(); }
     internal static async Task Run(string exe, IEnumerable<string> args, CancellationToken token)
     {
         var start = new ProcessStartInfo(exe) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true, RedirectStandardOutput = true, WorkingDirectory = Path.GetDirectoryName(exe)! };
@@ -68,16 +79,27 @@ internal static class DocumentTools
             input = Path.Combine(job, "extracted.html"); File.WriteAllText(input, HtmlText(text.ToString()), new UTF8Encoding(false)); ext = ".html";
         }
         else if (ext == ".txt") { input = Path.Combine(job, "text.html"); File.WriteAllText(input, HtmlText(ReadText(source)), new UTF8Encoding(false)); ext = ".html"; }
-        if (Pandoc == null) throw new IOException("Modulo documenti Pandoc non disponibile.");
         string from = ext switch { ".md" or ".markdown" => "markdown", ".htm" or ".html" => "html", _ => ext.TrimStart('.') };
         if (target == "PDF")
         {
             if (Office == null) throw new IOException("Per i PDF dei documenti serve LibreOffice locale.");
+
+            // DOCX, ODT, RTF and DOC are natively supported by LibreOffice Writer:
+            // convert directly without Pandoc intermediate stage to preserve original page size
+            // (A4 stays A4, Letter stays Letter), margins, orientation, tables, and typography.
+            if (ext is ".docx" or ".odt" or ".rtf" or ".doc")
+            {
+                await OfficePdf(input, staged, job, token);
+                return;
+            }
+
+            if (Pandoc == null) throw new IOException("Modulo documenti Pandoc non disponibile.");
             string docx = Path.Combine(job, "prepared.docx");
             await Run(Pandoc, ["--sandbox", "--standalone", "--from", from, "--to", "docx", "--output", docx, input], token);
-            SetA4PageSize(docx);
-            await OfficePdf(docx, staged, job, token); return;
+            await OfficePdf(docx, staged, job, token);
+            return;
         }
+        if (Pandoc == null) throw new IOException("Modulo documenti Pandoc non disponibile.");
         string to = target switch { "TXT" => "plain", "MD" => "gfm", "HTML" => "html5", _ => target.ToLowerInvariant() };
         var args = new List<string> { "--sandbox", "--standalone", "--from", from, "--to", to, "--output", staged, "--metadata", "title=Documento Flip" };
         if (to == "fb2")
@@ -92,40 +114,6 @@ internal static class DocumentTools
         await Run(Pandoc, args, token);
         if (!File.Exists(staged) || new FileInfo(staged).Length == 0) throw new IOException("Il modulo non ha prodotto un file valido.");
     }
-    static void SetA4PageSize(string docx)
-    {
-        XNamespace word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
-        using var archive = ZipFile.Open(docx, ZipArchiveMode.Update);
-        var entry = archive.GetEntry("word/document.xml") ?? throw new IOException("Il documento temporaneo non contiene word/document.xml.");
-        XDocument document;
-        using (var input = entry.Open()) document = XDocument.Load(input, LoadOptions.PreserveWhitespace);
-        var body = document.Root?.Element(word + "body") ?? throw new IOException("Il documento temporaneo non contiene il corpo del testo.");
-        var finalSection = body.Element(word + "sectPr");
-        if (finalSection == null) body.Add(new XElement(word + "sectPr"));
-        foreach (var section in body.Descendants(word + "sectPr"))
-        {
-            var size = section.Element(word + "pgSz");
-            if (size == null)
-            {
-                size = new XElement(word + "pgSz");
-                var previous = section.Elements().LastOrDefault(e => e.Name.Namespace == word &&
-                    e.Name.LocalName is "headerReference" or "footerReference" or "footnotePr" or "endnotePr" or "type");
-                if (previous == null) section.AddFirst(size);
-                else previous.AddAfterSelf(size);
-            }
-
-            // OOXML stores page dimensions in twentieths of a point.
-            bool landscape = (string?)size.Attribute(word + "orient") == "landscape";
-            size.SetAttributeValue(word + "w", landscape ? 16838 : 11906);
-            size.SetAttributeValue(word + "h", landscape ? 11906 : 16838);
-            size.SetAttributeValue(word + "code", null);
-        }
-
-        entry.Delete();
-        using var output = archive.CreateEntry("word/document.xml").Open();
-        document.Save(output, SaveOptions.DisableFormatting);
-    }
-
     static async Task OfficePdf(string input, string staged, string job, CancellationToken token)
     {
         // LibreOffice creates deep paths inside its profile; keep these independent of the source folder depth.

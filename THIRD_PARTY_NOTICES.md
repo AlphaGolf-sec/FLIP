@@ -6,6 +6,8 @@ Flip source code, icon, interface and procedurally generated wheel sound are MIT
 |---|---|---|
 | PDFtoImage | 5.4.0 | MIT, https://github.com/sungaila/PDFtoImage |
 | PdfPig | 0.1.16 | Apache-2.0, https://github.com/UglyToad/PdfPig |
+| Microsoft.ML.OnnxRuntime | 1.32.0 | MIT, https://github.com/microsoft/onnxruntime |
+| IS-Net (`isnet-general-use.onnx`, downloaded on demand) | v0.0.0 | Apache-2.0, https://github.com/danielgatis/rembg |
 | SkiaSharp and native assets | 4.150.1 | MIT and native third-party notices, https://github.com/mono/SkiaSharp |
 | PDFium Windows native binaries | 152.0.7961 | BSD-style and third-party notices, https://github.com/bblanchon/pdfium-binaries |
 | Pandoc (optional external executable) | 3.12.1 | GPL-2.0-or-later, https://github.com/jgm/pandoc/tree/3.12.1 |

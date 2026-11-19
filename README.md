@@ -1,98 +1,133 @@
-# FLIP for Windows
+# FLIP v0.6.0 — AURA Edition
 
-Convert a file without leaving Explorer. Drag it, press **Down Arrow**, and drop it on a format in the wheel. FLIP saves a new copy beside the original.
+![Version](https://img.shields.io/badge/version-v0.6.0%20AURA%20Edition-FF7A18?style=flat-square)
+![Stack](https://img.shields.io/badge/.NET%2010-WPF%20x64-1A1C23?style=flat-square)
+![Platform](https://img.shields.io/badge/Windows-10%20%2F%2011%20x64-1A1C23?style=flat-square)
+![License](https://img.shields.io/badge/License-GNU%20GPLv3-2ECC71?style=flat-square)
 
-FLIP is a local file converter for Windows x64. The current version is **0.5.1**.
+Converti qualsiasi file direttamente da Esplora File o dal Desktop: trascina uno o più file, premi **Freccia Giù** (o il tasto personalizzato) e rilascia su uno spicchio della ruota. FLIP elabora tutto **100% in locale** e salva la copia convertita accanto al file originale senza mai sovrascrivere gli originali.
 
 ![FLIP conversion wheel](docs/assets/wheel.png)
 
-[Download the demo (MP4)](docs/assets/flip-demo.mp4) · [Italiano](README.it.md) · [Installation guide](docs/WINDOWS-INSTALL.md) · [Changelog](CHANGELOG.md)
+[Demo (MP4)](docs/assets/flip-demo.mp4) · [Note di Rilascio v0.6.0](https://github.com/thetinyfoundry/FLIP/releases/tag/v0.6.0) · [Changelog](CHANGELOG.md) · [Guida Windows](docs/WINDOWS-INSTALL.md) · [Architecture](ARCHITECTURE.md)
 
 ---
 
-## Fixes in 0.5.1
+## Installazione in 1 Clic
 
-- Fixed direct PowerShell installation from the extracted ZIP. Double-click `Install-FLIP.cmd` for the standard setup.
-- Fixed FFmpeg detection in the documented per-user tools folder, so conversions such as MP4 to MP3 are available when FFmpeg is installed there.
-- DOCX to PDF now defaults to A4.
-- The multiple-conversion window explains how to open the wheel using the configured shortcut.
+Requisito di sistema: **Windows 10 / 11 (x64)** con [.NET 10 Windows Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/10.0).
 
-## 🌟 What's new in v0.5.0-beta.1
+### Metodo Rapido (Archivio Release `.zip`)
+1. Scarica ed estrai l'intero archivio `Flip-0.6.0-win-x64.zip` dalle [GitHub Releases](https://github.com/thetinyfoundry/FLIP/releases).
+2. Fai **doppio clic su `Installa-FLIP.cmd`**.
+   - Verifica automaticamente tutti gli hash `SHA256SUMS.txt` prima della copia.
+   - Installa FLIP in `%LOCALAPPDATA%\Programs\Flip`, crea i collegamenti su Desktop e Menu Start e avvia subito il **Tutorial Guidato Interattivo** in 4 passaggi.
+3. Per disinstallare in qualsiasi momento, fai doppio clic su **`Disinstalla-FLIP.cmd`**.
 
-- **Audio & Video conversion**: convert between video formats (MP4, MKV, WebM, AVI, MOV) and audio formats (MP3, WAV, FLAC, OGG, M4A, AAC), or extract audio tracks from video files on the fly with local FFmpeg.
-- **Native structured-data conversions**: bidirectionally convert JSON, YAML, XML, and CSV, or export them to PDF, HTML, Markdown, and TXT with zero external dependencies.
-- **Animated radial progress arc**: the wheel stays open during long conversions and displays an animated sweep line, a smooth circular progress arc, and a real-time percentage counter with a green completion checkmark.
-- **In-app GitHub update checker**: right-click the tray icon and select *"Verifica aggiornamenti su GitHub…"* to check for new releases.
-- **Reliable audio feedback**: restored tactile tick using modern WASAPI/Media Foundation audio playback.
-
----
-
-## Download and install
-
-**[Download FLIP 0.5.1 for Windows x64](https://github.com/thetinyfoundry/FLIP/releases/download/v0.5.1/Flip-0.5.1-win-x64.zip)** · [Release notes and checksum](https://github.com/thetinyfoundry/FLIP/releases/tag/v0.5.1)
-
-1. Open [Releases](https://github.com/thetinyfoundry/FLIP/releases), download the `Flip-0.5.1-win-x64.zip` archive and extract it.
-2. Install the [.NET 10 Windows Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/10.0) if not already installed.
-3. Exit FLIP from its tray menu if it is running, then double-click `Install-FLIP.cmd` in the extracted folder. Open FLIP from the Desktop or Start menu shortcut. You do not need the SDK or a compiler to run the packaged app.
-
-### Optional engines:
-- **Audio & Video**: Place `ffmpeg.exe` in `%LOCALAPPDATA%\Flip\tools` and restart FLIP. FLIP also detects FFmpeg installed through WinGet or available on PATH.
-- **Documents (Pandoc & LibreOffice)**: close FLIP and run `Install-DocumentEngine.ps1` from the package to download official Pandoc. LibreOffice provides document rendering.
+### Metodo PowerShell da Sorgente o Pacchetto Estratto
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Install.ps1
+```
+Usa `-NoShortcuts`, `-NoStartup` o `-NoLaunch` se desideri escludere collegamenti, avvio automatico o avvio immediato.
 
 ---
 
-## Build from source
+## Cosa rende unico FLIP v0.6.0 ("AURA Edition")
 
-Install the [.NET 10 SDK for Windows x64](https://dotnet.microsoft.com/download/dotnet/10.0), clone or download this repository, and open PowerShell in the project folder:
-
-~~~powershell
-.\scripts\Build.ps1 -DocumentEngine
-.\scripts\Install.ps1
-~~~
-
-The installer copies FLIP to `%LOCALAPPDATA%\Programs\Flip`, creates Desktop and Start Menu shortcuts, and enables startup when you sign in to Windows. Use `-NoShortcuts` or `-NoStartup` to opt out.
-
-FLIP stays in the notification area near the clock. Right-click its icon to open Settings, choose a shortcut, change the language, test the wheel sound or check for GitHub updates.
-
----
-
-## Use the wheel
-
-1. Select one or more files in Explorer or on the Desktop.
-2. Start dragging and press **Down Arrow** (or your custom shortcut). Release the key when the wheel appears.
-3. Hover over an available output format and drop.
-4. During conversion, watch the circular progress arc and percentage indicator. Press **Escape** at any time to cancel.
-
-FLIP reserves the selected key during Explorer/Desktop mouse gestures. Outside that context it passes keyboard input through.
-
-Output names include `.converted` and a number when needed. FLIP **never** overwrites the original or an existing output.
+- **Ruota Radiale Multi-Monitor con Flip Verticale 3D & Aura Luminosa (`Wheel` & `ScreenEdgeAuraWindow`)**:
+  - Sotto-anelli concentrici (`Sub-Rings`) per gestire oltre 298 estensioni su 18 categorie senza affollamento e senza sbalzi grafici.
+  - **Ribaltamento 180° (`Tab` / Rotellina)** tra **Fronte (Formati)** e **Retro (Strumenti Rapidi Creator)**: *Turntable 360° 3D GIF*, *Palette #HEX*, *Onda Sonora trasparente*, *Crop 9:16 Social Blur*, *Privacy EXIF/Metadata*, *Merge PDF*, *Remove BG*, *OCR*, *Rotazione*, *Target MB*, *Pack ZIP* (+ combinabile `+ ARCHIVIO .ZIP` con `Z`).
+  - **Traccia dell'Ultima Scelta (`#FFB547`)**: ricorda in RAM l'ultimo formato convertito con successo per estensione e evidenzia con un arco ambra lo spicchio corrispondente (anche dentro `+ EXTRA`) senza alterare l'ordine naturale degli spicchi.
+  - **Aura luminosa ai bordi del monitor** compatibile con più schermi, tavolette grafiche a DPI misti e posizionamento fisico forzato al cursore.
+- **QuickLook Istantaneo (`Spazio` durante il drag — `FlipPreviewWindow`)**:
+  - **Viewport 3D interattivo (`.obj`, `.fbx` binari & ASCII, `.stl`, `.ply`, `.glb`, `.gltf`, `.3mf`, `.dae`)** + vista **Blueprint a 4 Viste** (`Tab`) + **Segnalibro Inquadratura `(A)`** (`📌 Memorizza Vista (A)` / `↺ Richiama Vista (A)` con salvataggio di orientamento, pan, zoom e auto-giro).
+  - **Palette #HEX & Provino Tipografico `"Aa"`**: estrae i 6 colori dominanti e consente di provare qualsiasi coppia *Testo / Sfondo* con calcolo reale del contrasto WCAG (`⇄ Scambia` + copia `#TESTO / #SFONDO`).
+  - **Audio, Testo & Codici**: anteprima e salvataggio su disco solo premendo `Ctrl+S` (nessun file temporaneo nella cartella dell'utente).
+- **Conversione Nativa PDF/A-2b (ISO 19005-2 PA/Legale)**:
+  - Genera PDF/A conformi (`%PDF-1.7`, metadati XMP `pdfaid:part=2` / `conformance=B`, `OutputIntents` `sRGB IEC61966-2.1` + profilo ICC) direttamente da PDF (`_pdfa.pdf`), immagini e documenti di testo tramite `PdfEngine`.
+- **Trascrizione Audio/Video Offline con Whisper AI (`LocalAiEngine` & `WhisperLocator`)**:
+  - Pipeline locale *Audio/Video → WAV 16 kHz mono → TXT / SRT* puliti, rilevamento intelligente *Zero-Duplicati* sul PC con esclusione automatica di ambienti Python parziali (`python_embeded`/`venv`/`conda`).
+- **Recupero del Batch Misto (Ruota & Hub)**:
+  - Trascinando file eterogenei (es. `8 PNG, 2 WAV, 1 PDF`), FLIP mostra pillole cliccabili/selezionabili per ogni gruppo omogeneo invece di bloccarsi su *"Nessun formato comune"*.
+- **Modalità Accessibilità Tobii / Senza Mani (`GazeOrbWindow` & `GazeDwell`)**:
+  - Bollino `[ F ]` discreto ancorato al bordo destro (`Opacity = 0.35`, risveglio a `1.0` entro `90px`, trascinabile verticalmente) + selezione a sosta dello sguardo (Dwell `600–2500ms`) su Ruota e QuickLook senza usare mouse o tastiera.
+- **Settings Hub Unificato a 6 Sezioni (`SettingsHubWindow`) & Installer 1-Click Motori**:
+  - Sezioni scure borderless: `1. Ruota & Spicchi`, `2. Attivazione & Input`, `3. Destinazione File`, `4. Motori & GPU` (verifica live su disco + installer 1-Click per `whisper`, `pandoc`, `ffmpeg`, `tesseract`, `calibre`, `libreoffice`), `5. Cartelle Automatiche`, `6. Cronologia & Preset` (con `StripMetadata`).
 
 ---
 
-## Supported conversions
+## Formati e Motori Supportati
 
-| Category | Input Formats | Available Outputs | Engine |
+| Categoria | Sorgenti Principali | Destinazioni Principali | Motore |
 | --- | --- | --- | --- |
-| **Images** | PNG, JPG/JPEG, WebP, BMP, TIFF, GIF | PNG, JPG, WebP, PDF, BMP, TIFF, GIF (excluding source) | Native SkiaSharp |
-| **Structured Data** | JSON, YAML/YML, XML, CSV | JSON, YAML, XML, CSV, TXT, HTML, Markdown, PDF | Built-in |
-| **Audio** | MP3, WAV, FLAC, OGG, M4A, AAC, WMA, OPUS | WAV, MP3, FLAC, OGG, M4A, AAC | Local FFmpeg |
-| **Video** | MP4, MKV, WebM, AVI, MOV, WMV, M4V | MP4, MKV, WebM, AVI, MOV, plus MP3 and WAV audio extraction | Local FFmpeg |
-| **Plain Text** | TXT | PDF, PNG, JPG, WebP (core); DOCX, EPUB, Markdown, HTML, ODT, RTF, FB2, RST (Pandoc) | Core / Pandoc |
-| **Documents** | Markdown, HTML, DOCX, EPUB, ODT, RTF, FB2, RST | Other document formats with Pandoc; rendering to PDF/images requires LibreOffice | Pandoc / LibreOffice |
-| **PDF** | PDF | PNG/JPG/WebP per page and extracted TXT; other document formats with Pandoc | Native / Pandoc |
+| **Immagini** | PNG, JPG/JPEG, WebP, BMP, TIFF, GIF, ICO | PNG, JPG, WebP, PDF, PDF/A, BMP, TIFF, GIF, ICO | Built-in (`ImageEngine`) |
+| **PDF & Archivio PA** | PDF | PDF/A-2b (`_pdfa.pdf`), PNG, JPG, WebP, TXT, DOCX/ODT/MD | Built-in (`PdfEngine`) / Pandoc |
+| **Documenti & Office** | TXT, MD, HTML, DOCX, ODT, RTF, EPUB | DOCX, ODT, RTF, PDF, PDF/A, HTML, MD, TXT, EPUB | Built-in (`OfficeOpenXmlEngine`) / Pandoc / LibreOffice |
+| **Dati Strutturati** | JSON, JSONL, YAML, TOML, XML, CSV, TSV, INI | JSON, JSONL, YAML, TOML, XML, CSV, TSV, INI, HTML, MD, XLSX | Built-in (`DataSerializationEngine`) |
+| **3D, CAD & Geo** | OBJ, STL, PLY, FBX, GLB, GLTF, 3MF, DAE, SVG, DXF, GPX, KML, GeoJSON | Tutte le mesh 3D inter-formato + Blueprint PNG/PDF + Turntable GIF + SVG/DXF/Geo | Built-in (`Mesh3DVectorGeoEngine`) |
+| **Archivi** | ZIP, TAR, GZ, TGZ, CBZ, EPUB, 7Z, RAR | ZIP, TAR, GZ, TGZ, CBZ, 7Z | Built-in (`ArchiveEngine`, Zip-Slip safe) |
+| **Audio & Video + AI** | WAV, MP3, FLAC, OGG, M4A, AAC, OPUS, MP4, MKV, WebM, AVI, MOV | Audio, Video, GIF/WebP, **TXT / SRT** (trascrizione offline) | FFmpeg / Media Foundation / Whisper AI |
 
 ---
 
-## Privacy and local execution
+## Architettura del Repository
 
-All conversions run **100% locally** on your machine without third-party cloud services or account requirements. Converted files remain safely in their original folder.
-
-Runtime diagnostic logs are stored under `%LOCALAPPDATA%\Flip\logs`. Review and redact logs before sharing.
+```text
+src/Flip/
+├── Core/                  # Catalogo FormatRegistry (298+ est.), FlipSettings, SettingsStore atomico, OutputPathAllocator (lease)
+├── Routing/               # RoutePlanner BFS multi-hop (isolamento dominio), IConversionEngine, IQuickTool
+├── Engines/               # Image, Pdf (PDF/A-2b), OfficeOpenXml, DataSerialization, Archive, Mesh3DVectorGeo, ExternalCli + QuickTools
+├── SettingsHub/           # SettingsHubWindow a 6 sezioni dark-theme, WheelStudio, Output, Motori 1-Click, Watch Folders, Preset
+├── Wheel.cs / Layout      # Ruota radiale, Sub-Rings, multi-monitor DPI, traccia ultima scelta, batch misto, Flip 3D
+├── FlipPreviewWindow.cs   # FLIP QuickLook universale: Viewport 3D + Vista (A), Blueprint, Palette + Provino Aa, Testo/Audio
+├── FirstRunWelcomeWindow.cs # Tutorial guidato interattivo a 4 schede con mini-ruota e coach-marks
+├── GazeOrbWindow.cs       # Accessibilità Tobii Senza Mani (Auto-Dock + Dwell-to-Select)
+├── ScreenEdgeAuraWindow.cs# Aura arancione ai bordi del monitor con follow multi-monitor
+├── BrowserDropService.cs  # Intercettazione drag immagini/URL/Data-URI dal browser
+├── ClipboardFlipService.cs# Conversione rapida dagli Appunti (Ctrl+Shift+F)
+└── WatchFolderService.cs  # Monitoraggio cartelle automatico anti-loop
+scripts/
+├── Build.ps1              # Compilazione e publish win-x64
+├── Package.ps1            # Creazione pacchetto ZIP release, pulizia PDB/log, audit privacy su Flip.dll e SHA256SUMS.txt
+├── Install.ps1            # Installer per utente con verifica SHA256SUMS.txt, runtime check e avvio immediato
+├── Installa-FLIP.cmd      # Launcher 1-clic per utenti Windows (ExecutionPolicy Bypass)
+└── Disinstalla-FLIP.cmd   # Disinstallazione pulita di app, startup e collegamenti
+```
 
 ---
 
-## License
+## Compilazione e Verifica da Sorgente
 
-FLIP's own code and original assets use the [MIT License](LICENSE). Third-party components retain their respective licenses. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Richiede [.NET 10 SDK (win-x64)](https://dotnet.microsoft.com/download/dotnet/10.0).
 
-[Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [Architecture](ARCHITECTURE.md)
+```powershell
+# 1. Build Release (0 errori, 0 avvisi richiesti)
+dotnet build src/Flip/Flip.csproj -c Release
+
+# 2. Suite Automatica Input, UI, Routing & Scenari
+dotnet run --project src/Flip/Flip.csproj -c Release --no-build -- --test-input
+
+# 3. Suite Automatica Conversioni End-to-End
+dotnet run --project src/Flip/Flip.csproj -c Release --no-build -- --test-conversions
+
+# 4. Creazione Pacchetto Release ZIP + SHA256SUMS.txt
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Package.ps1
+```
+
+---
+
+## Privacy & Sicurezza
+
+- **100% Locale**: nessun dato o file viene inviato a server esterni o servizi cloud. Le conversioni avvengono in directory temporanee isolate (`%TEMP%\FLIP\Jobs\<guid>`) con commit atomico tramite lease `IDisposable` e salvataggio predefinito accanto al file originale.
+- **Sicurezza I/O & 3D**: protezione Zip-Slip negli archivi, isolamento profili LibreOffice headless, blocco path traversal / URI esterni / symlink / overflow buffer sui file `.gltf`, verifica hash SHA-256 sugli installer dei motori e nei pacchetti di release.
+- **Log & Export Puliti**: diagnostica locale disabilitata in produzione (`Evidence.Enabled == false` salvo flag diagnostici) con redazione di `%USERPROFILE%`, `data:` URI ed URL; esportazioni impostazioni prive di cronologia e percorsi personali.
+
+---
+
+## Licenza
+
+A partire dalla **v0.6.0**, il codice originale e le risorse di FLIP sono distribuiti sotto licenza **[GNU GPLv3](LICENSE)** (`GPL-3.0-only`). Copyright © 2026 The Tiny Foundry / Raffaele Acanfora.
+
+I componenti di terze parti mantengono le rispettive licenze riportate nelle [note sulle dipendenze](THIRD_PARTY_NOTICES.md).
+
+[Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [Architecture](ARCHITECTURE.md) · [Release Notes v0.6.0](https://github.com/thetinyfoundry/FLIP/releases/tag/v0.6.0)

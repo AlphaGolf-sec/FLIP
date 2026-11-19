@@ -4,53 +4,125 @@ param(
     [switch]$CreateShortcuts=$true,
     [switch]$EnableStartup=$true,
     [switch]$NoShortcuts,
-    [switch]$NoStartup
+    [switch]$NoStartup,
+    [switch]$NoLaunch
 )
 $ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSScriptRoot
+
 if(!$Source){
-    $payload=Join-Path $PSScriptRoot 'payload'
-    if(Test-Path -LiteralPath $payload -PathType Container){$Source=$payload}
-    else{$Source=Join-Path $root 'app'}
+    # 1. Pacchetto ZIP distribuito: payload\ accanto a Install.ps1
+    if(Test-Path -LiteralPath (Join-Path $PSScriptRoot 'payload\Flip.exe') -PathType Leaf){
+        $Source = Join-Path $PSScriptRoot 'payload'
+    }
+    # 2. Cartella scripts\ del repository sorgente: app\ alla radice
+    elseif(Test-Path -LiteralPath (Join-Path $root 'app\Flip.exe') -PathType Leaf){
+        $Source = Join-Path $root 'app'
+    }
+    # 3. app\ nella stessa cartella dello script
+    elseif(Test-Path -LiteralPath (Join-Path $PSScriptRoot 'app\Flip.exe') -PathType Leaf){
+        $Source = Join-Path $PSScriptRoot 'app'
+    }
+    elseif(Test-Path -LiteralPath (Join-Path (Get-Location) 'payload\Flip.exe') -PathType Leaf){
+        $Source = Join-Path (Get-Location) 'payload'
+    }
+    elseif(Test-Path -LiteralPath (Join-Path (Get-Location) 'app\Flip.exe') -PathType Leaf){
+        $Source = Join-Path (Get-Location) 'app'
+    }
+    else {
+        $Source = if(Test-Path -LiteralPath (Join-Path $PSScriptRoot 'payload') -PathType Container){ Join-Path $PSScriptRoot 'payload' } else { Join-Path $root 'app' }
+    }
 }
 if(!$Destination){$Destination=Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Programs\Flip'}
 $Source=[IO.Path]::GetFullPath($Source).TrimEnd('\')
 $Destination=[IO.Path]::GetFullPath($Destination).TrimEnd('\')
+$packageRoot=Split-Path -Parent $Source
+
 if($Source -eq $Destination -or $Destination.StartsWith($Source+'\',[StringComparison]::OrdinalIgnoreCase) -or $Source.StartsWith($Destination+'\',[StringComparison]::OrdinalIgnoreCase)){
-    throw 'Source and destination must be separate, non-nested folders.'
+    throw 'Origine e destinazione devono essere cartelle distinte e non annidate.'
 }
+
+# Verifica preventiva degli hash SHA256SUMS.txt prima di toccare la cartella di destinazione
+$sumsPath = @((Join-Path $packageRoot 'SHA256SUMS.txt'), (Join-Path $PSScriptRoot 'SHA256SUMS.txt')) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+if($sumsPath){
+    $sumsRoot = Split-Path -Parent $sumsPath
+    $checked = 0
+    foreach($line in Get-Content -LiteralPath $sumsPath -Encoding UTF8){
+        if([string]::IsNullOrWhiteSpace($line)){continue}
+        if($line -match '^([0-9a-fA-F]{64})\s+\*?(.+)$'){
+            $expectedHash = $matches[1].ToLowerInvariant()
+            $rel = $matches[2].Trim()
+            if($rel -eq 'SHA256SUMS.txt'){continue}
+            $candidate = [IO.Path]::GetFullPath((Join-Path $sumsRoot ($rel.Replace('/', '\'))))
+            if(!$candidate.StartsWith(($sumsRoot.TrimEnd('\') + '\'), [StringComparison]::OrdinalIgnoreCase)){
+                throw ('Voce non valida in SHA256SUMS.txt: ' + $rel)
+            }
+            if(!(Test-Path -LiteralPath $candidate -PathType Leaf)){
+                throw ('File del pacchetto mancante per verifica SHA256: ' + $rel)
+            }
+            $actualHash = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
+            if($actualHash -ne $expectedHash){
+                throw ('Hash SHA256 non corrispondente per ' + $rel + ' (pacchetto corrotto o modificato).')
+            }
+            $checked++
+        }
+    }
+    Write-Host ("Integrita SHA256SUMS.txt verificata ({0} file)." -f $checked) -ForegroundColor Cyan
+}
+
 foreach($name in @('Flip.exe','Flip.dll','Flip.runtimeconfig.json','Flip.deps.json','Flip.ico','LICENSE','THIRD_PARTY_NOTICES.md','libSkiaSharp.dll','pdfium.dll')){
-    if(!(Test-Path -LiteralPath (Join-Path $Source $name) -PathType Leaf)){throw ('Incomplete build: missing '+$name+'. Run Build.ps1 first.')}
+    if(!(Test-Path -LiteralPath (Join-Path $Source $name) -PathType Leaf)){
+        throw ("Pacchetto o build incompleta: manca '$name' in '$Source'. Estrai l'intero archivio ZIP prima di eseguire Installa-FLIP.cmd, oppure esegui '.\scripts\Build.ps1'.")
+    }
 }
-$runtime=@(& dotnet --list-runtimes)
-if($LASTEXITCODE -ne 0 -or !($runtime -match '^Microsoft.WindowsDesktop.App 10\.')){throw 'Install Microsoft .NET Desktop Runtime 10 x64 first.'}
+
+$runtime=@(& dotnet --list-runtimes 2>$null)
+if($LASTEXITCODE -ne 0 -or !($runtime -match '^Microsoft\.WindowsDesktop\.App 10\.')){
+    throw 'Installa prima Microsoft .NET 10 Windows Desktop Runtime x64 (https://dotnet.microsoft.com/download/dotnet/10.0).'
+}
+
 $running=@(Get-Process Flip -ErrorAction SilentlyContinue)
-if($running.Count){throw 'Exit Flip from the tray menu before installing or updating.'}
+if($running.Count){
+    throw 'Chiudi FLIP dal menu dell''icona vicino all''orologio prima di installare o aggiornare.'
+}
+
 if(Test-Path -LiteralPath $Destination){
-    if(!(Test-Path -LiteralPath (Join-Path $Destination 'Flip.exe') -PathType Leaf)){throw 'Destination exists and is not a Flip installation. Choose an empty new path.'}
+    if(!(Test-Path -LiteralPath (Join-Path $Destination 'Flip.exe') -PathType Leaf)){
+        throw 'La cartella di destinazione esiste ma non contiene una installazione valida di FLIP.'
+    }
     foreach($name in @('Flip.exe','Flip.dll')){
         try{$probe=[IO.File]::Open((Join-Path $Destination $name),[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None);$probe.Dispose()}
-        catch{throw 'Destination is in use or not writable. Exit that Flip installation before updating.'}
+        catch{throw 'I file in destinazione risultano in uso. Chiudi FLIP prima di aggiornare.'}
     }
     $backup=$Destination+'.backup-'+[Guid]::NewGuid().ToString('N')
     Copy-Item -LiteralPath $Destination -Destination $backup -Recurse
-    Write-Output ('Backup: '+$backup)
+    Write-Output ('Backup precedente creato: '+$backup)
 }
-# Copy, never recursively delete/move existing paths. Keep the build as rollback material.
+
 New-Item -ItemType Directory -Path $Destination -Force | Out-Null
 Get-ChildItem -LiteralPath $Source | Copy-Item -Destination $Destination -Recurse -Force
 foreach($file in Get-ChildItem -LiteralPath $Source -File -Recurse){
     $relative=$file.FullName.Substring($Source.Length).TrimStart('\')
-    $sha=[Security.Cryptography.SHA256]::Create()
-    try{
-        $a=[BitConverter]::ToString($sha.ComputeHash([IO.File]::ReadAllBytes($file.FullName)))
-        $b=[BitConverter]::ToString($sha.ComputeHash([IO.File]::ReadAllBytes((Join-Path $Destination $relative))))
-    }finally{$sha.Dispose()}
-    if($a -ne $b){throw ('Installed file checksum mismatch: '+$relative)}
+    $srcHash=(Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash
+    $dstHash=(Get-FileHash -LiteralPath (Join-Path $Destination $relative) -Algorithm SHA256).Hash
+    if($srcHash -ne $dstHash){throw ('Checksum post-copia non corrispondente: '+$relative)}
 }
+
 $exe=Join-Path $Destination 'Flip.exe'
-if($CreateShortcuts -and !$NoShortcuts){& $exe --install-shortcuts; if($LASTEXITCODE -ne 0){throw 'Shortcut installation failed.'}}
-if($EnableStartup -and !$NoStartup){& $exe --enable-startup; if($LASTEXITCODE -ne 0){throw 'Startup configuration failed.'}}
-Write-Output ('Installed and checksum-verified: '+$exe)
-Write-Output ('Shortcuts requested: '+[bool]($CreateShortcuts -and !$NoShortcuts)+'; startup requested: '+[bool]($EnableStartup -and !$NoStartup))
-Write-Output 'Use -NoShortcuts and/or -NoStartup to opt out of the installation defaults. Keep this path stable.'
+if($CreateShortcuts -and !$NoShortcuts){
+    & $exe --install-shortcuts
+    if($LASTEXITCODE -ne 0){throw 'Creazione collegamenti Desktop e Menu Start non riuscita.'}
+}
+if($EnableStartup -and !$NoStartup){
+    & $exe --enable-startup
+    if($LASTEXITCODE -ne 0){throw 'Abilitazione avvio con Windows non riuscita.'}
+}
+
+Write-Host ''
+Write-Host ("FLIP installato e verificato in: " + $Destination) -ForegroundColor Green
+Write-Host ('Collegamenti Desktop/Menu Start: ' + [bool]($CreateShortcuts -and !$NoShortcuts) + ' | Avvio con Windows: ' + [bool]($EnableStartup -and !$NoStartup))
+
+if(!$NoLaunch){
+    Start-Process -FilePath $exe
+    Write-Host 'FLIP avviato! Trovi l''icona nella barra di sistema vicino all''orologio.' -ForegroundColor Green
+}
