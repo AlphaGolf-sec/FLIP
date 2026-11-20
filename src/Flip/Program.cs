@@ -188,6 +188,14 @@ internal static class Program
     {
         try { using var pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.Out); pipe.Connect(1500); using var writer = new StreamWriter(pipe, new UTF8Encoding(false)) { AutoFlush = true }; writer.WriteLine(message); }
         catch (TimeoutException) { if (message != "exit") MessageBox.Show(Loc.T("Flip è già in avvio. Attendi un istante e usa l'icona nell'area di notifica.", "FLIP is already starting. Wait a moment and use the system tray icon."), "Flip"); }
+        catch (UnauthorizedAccessException)
+        {
+            // The running instance has a higher integrity level (e.g. started as administrator), so Windows denies the pipe.
+            MessageBox.Show(Loc.T(
+                "Flip è già in esecuzione con privilegi di amministratore e non accetta comandi da questa finestra.\n\nChiudi Flip dall'icona nell'area di notifica e riaprilo normalmente, senza \"Esegui come amministratore\".",
+                "FLIP is already running with administrator privileges and cannot receive commands from this window.\n\nExit FLIP from the system tray icon and start it again normally, without \"Run as administrator\"."),
+                "Flip", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 }
 internal sealed class Host : Window, IDisposable
