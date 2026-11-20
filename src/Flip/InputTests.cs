@@ -985,16 +985,24 @@ internal static class InputTests
 
         // Scenario .docx
         var docxWheel = InspectWheelFor("docx", defaultSettings);
-        string[] docxMustPrimary = ["pdf", "txt", "md", "html", "odt", "rtf"];
+        string[] docxMustPrimary = ["txt", "md", "html", "odt", "rtf"];
         checks["matrix_wheel_docx_shows_docs_primary_and_images_secondary"] =
             docxMustPrimary.All(ext => docxWheel.PrimaryRing.Contains(ext)) &&
             docxWheel.AllReachable.Contains("png") &&
             docxWheel.AllReachable.Contains("jpg");
         var docxPdfSettings = new FlipSettings { EnginePriorityOrder = ["pdf_builtin"] }.CreateSnapshot();
-        string expectedDocxPdfEngine = new LibreOfficeEngine().IsAvailable(docxPdfSettings) ? "libreoffice" : "pdf_builtin";
-        checks["matrix_docx_to_pdf_prefers_layout_preserving_engine"] =
-            RoutePlanner.TryPlanRoute("docx", "pdf", docxPdfSettings, out var docxPdfRoute) &&
-            docxPdfRoute is { Hops.Count: 1 } && docxPdfRoute.Hops[0].Engine.Id == expectedDocxPdfEngine;
+        bool hasWriter = new LibreOfficeEngine().IsAvailable(docxPdfSettings);
+        bool canExportDocxPdf = RoutePlanner.TryPlanRoute("docx", "pdf", docxPdfSettings, out var docxPdfRoute);
+        checks["matrix_docx_to_pdf_requires_layout_preserving_engine"] =
+            canExportDocxPdf == hasWriter && docxWheel.AllReachable.Contains("pdf") == hasWriter &&
+            (!hasWriter || (docxPdfRoute is { Hops.Count: 1 } && docxPdfRoute.Hops[0].Engine.Id == "libreoffice"));
+
+        var pdfWheel = InspectWheelFor("pdf", defaultSettings);
+        bool canExportPdfDoc = RoutePlanner.TryPlanRoute("pdf", "doc", defaultSettings, out var pdfDocRoute);
+        checks["matrix_pdf_to_doc_visible_only_with_libreoffice"] =
+            canExportPdfDoc == hasWriter && pdfWheel.AllReachable.Contains("doc") == hasWriter &&
+            (!hasWriter || (pdfDocRoute is { Hops.Count: 2 } && pdfDocRoute.Hops[0].Engine.Id == "pdf_builtin" &&
+                pdfDocRoute.Hops[1].Engine.Id == "libreoffice"));
 
         // Scenario .xlsx e .csv
         var xlsxWheel = InspectWheelFor("xlsx", defaultSettings);
@@ -1104,12 +1112,25 @@ internal static class InputTests
                     using var output = zip.CreateEntry("word/document.xml").Open();
                     document.Save(output);
                 }
-                using var layoutPdf = UglyToad.PdfPig.PdfDocument.Open(StepConvert(layoutDocx, "pdf"));
+                string layoutPdfPath = StepConvert(layoutDocx, "pdf");
+                using var layoutPdf = UglyToad.PdfPig.PdfDocument.Open(layoutPdfPath);
                 var page = layoutPdf.GetPage(1);
                 bool preservesPageSize = Math.Abs(page.Width - 504) <= 2 && Math.Abs(page.Height - 648) <= 2;
                 checks["matrix_e2e_docx_to_pdf_preserves_page_size"] = preservesPageSize;
                 if (!preservesPageSize)
                     Evidence.Log("test.docx-pdf.page-size", new { page.Width, page.Height });
+                var privacyPdf = RoutePlanner.ExecuteRouteAsync(layoutDocx, "pdf", matrixSettings,
+                    new() { ["strip_metadata"] = "true" }).GetAwaiter().GetResult();
+                checks["matrix_docx_to_pdf_refuses_unsupported_metadata_removal"] =
+                    !privacyPdf.Success && privacyPdf.ErrorMessage?.Contains("preset PDF", StringComparison.Ordinal) == true;
+                string legacyDoc = StepConvert(layoutPdfPath, "doc");
+                using var docStream = File.OpenRead(legacyDoc);
+                byte[] signature = new byte[8];
+                docStream.ReadExactly(signature);
+                string extractedDoc = StepConvert(legacyDoc, "txt");
+                checks["matrix_e2e_pdf_to_doc_generates_word97_with_editable_text"] =
+                    Convert.ToHexString(signature) == "D0CF11E0A1B11AE1" &&
+                    File.ReadAllText(extractedDoc).Contains("verifica conversione universale", StringComparison.OrdinalIgnoreCase);
             }
             string stepOdt = StepConvert(stepDocx, "odt");
             string stepRtf = StepConvert(stepOdt, "rtf");

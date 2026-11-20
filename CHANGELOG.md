@@ -4,6 +4,11 @@ Tutte le novità principali del progetto **FLIP** sono documentate in questo fil
 
 ---
 
+## In sviluppo
+
+- **DOCX → PDF.** FLIP usa LibreOffice per conservare l'impaginazione. Installa LibreOffice da **Impostazioni → Motori & GPU** se PDF non compare tra i formati. Questa conversione richiede un preset PDF senza rimozione metadati.
+- **PDF → DOC.** I PDF con testo selezionabile si possono convertire in un file Word 97–2003 modificabile con LibreOffice. Il documento riprende il testo. Per impaginazione, immagini e scansioni resta necessario un flusso separato.
+
 ## [0.6.0] - 2026-11-18 ("AURA Edition")
 
 ### Added
