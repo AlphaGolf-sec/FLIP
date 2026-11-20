@@ -100,17 +100,24 @@ internal static class Program
                 int report = Array.IndexOf(args, "--report"); if (report >= 0) File.WriteAllText(OptionValue(args, "--report"), json);
                 return results.Any(r => r.Error != null) ? 1 : 0;
             }
-            if (args.Contains("--stop")) { Send("exit"); return 0; }
-            if (args.Contains("--preview-sound")) { Send("sound-test"); return 0; }
+            if (args.Contains("--stop")) return Send("exit");
+            if (args.Contains("--preview-sound")) return Send("sound-test");
             if (args.Contains("--set-trigger"))
             {
                 var choice = WheelShortcut.Parse(OptionValue(args, "--set-trigger"));
-                using var check = new Mutex(false, "Local\\Flip.Desktop.v2", out bool absent);
-                if (!absent) { Send("trigger:" + choice.Id); return 0; }
+                using var check = OpenInstanceMutex(false, out bool absent);
+                if (check is null) return 1;
+                if (!absent) return Send("trigger:" + choice.Id);
                 var settings = AppPreferences.Load(); settings.Trigger = choice.Id; settings.Save(); return 0;
             }
-            using var mutex = new Mutex(true, "Local\\Flip.Desktop.v2", out bool fresh);
-            if (!fresh) { if (args.Contains("--background")) return 0; int p = Array.IndexOf(args, "--files"); Send(args.Contains("--settings") ? "settings" : p >= 0 ? (args.Contains("--multi") ? "multi:" : "") + JsonSerializer.Serialize(FileArguments(args)) : "select"); return 0; }
+            using var mutex = OpenInstanceMutex(true, out bool fresh, quiet: args.Contains("--background"));
+            if (mutex is null) return 1;
+            if (!fresh)
+            {
+                if (args.Contains("--background")) return 0;
+                int p = Array.IndexOf(args, "--files");
+                return Send(args.Contains("--settings") ? "settings" : p >= 0 ? (args.Contains("--multi") ? "multi:" : "") + JsonSerializer.Serialize(FileArguments(args)) : "select");
+            }
             try
             {
                 var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
@@ -184,18 +191,38 @@ internal static class Program
         }
     }
 
-    static void Send(string message)
+    static Mutex? OpenInstanceMutex(bool initiallyOwned, out bool createdNew, bool quiet = false)
+    {
+        try { return new Mutex(initiallyOwned, "Local\\Flip.Desktop.v2", out createdNew); }
+        catch (UnauthorizedAccessException ex)
+        {
+            createdNew = false;
+            ReportInstanceAccessDenied(ex, quiet);
+            return null;
+        }
+    }
+
+    static void ReportInstanceAccessDenied(UnauthorizedAccessException exception, bool quiet)
+    {
+        Evidence.Log("instance.access-denied", exception.ToString());
+        if (quiet) return;
+
+        MessageBox.Show(Loc.T(
+            "Impossibile comunicare con l’istanza di FLIP già aperta. Potrebbe essere in esecuzione come amministratore. Chiudi FLIP dall’area di notifica vicino all’orologio e riaprilo normalmente.",
+            "Could not communicate with the running FLIP instance. It may be running as administrator. Exit FLIP from the notification area next to the clock and open it normally."),
+            "FLIP", MessageBoxButton.OK, MessageBoxImage.Warning);
+    }
+
+    static int Send(string message)
     {
         try { using var pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.Out); pipe.Connect(1500); using var writer = new StreamWriter(pipe, new UTF8Encoding(false)) { AutoFlush = true }; writer.WriteLine(message); }
         catch (TimeoutException) { if (message != "exit") MessageBox.Show(Loc.T("Flip è già in avvio. Attendi un istante e usa l'icona nell'area di notifica.", "FLIP is already starting. Wait a moment and use the system tray icon."), "Flip"); }
-        catch (UnauthorizedAccessException)
+        catch (UnauthorizedAccessException ex)
         {
-            // The running instance has a higher integrity level (e.g. started as administrator), so Windows denies the pipe.
-            MessageBox.Show(Loc.T(
-                "Flip è già in esecuzione con privilegi di amministratore e non accetta comandi da questa finestra.\n\nChiudi Flip dall'icona nell'area di notifica e riaprilo normalmente, senza \"Esegui come amministratore\".",
-                "FLIP is already running with administrator privileges and cannot receive commands from this window.\n\nExit FLIP from the system tray icon and start it again normally, without \"Run as administrator\"."),
-                "Flip", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ReportInstanceAccessDenied(ex, quiet: message == "exit");
+            return 1;
         }
+        return 0;
     }
 }
 internal sealed class Host : Window, IDisposable
