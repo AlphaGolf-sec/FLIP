@@ -4,10 +4,11 @@ Tutte le novità principali del progetto **FLIP** sono documentate in questo fil
 
 ---
 
-## In sviluppo
+## [0.6.1] - 2026-11-20 ("AURA Edition")
 
 - **DOCX → PDF.** FLIP usa LibreOffice per conservare l'impaginazione. Installa LibreOffice da **Impostazioni → Motori & GPU** se PDF non compare tra i formati. Questa conversione richiede un preset PDF senza rimozione metadati.
 - **PDF → DOC.** I PDF con testo selezionabile si possono convertire in un file Word 97–2003 modificabile con LibreOffice. Il documento riprende il testo. Per impaginazione, immagini e scansioni resta necessario un flusso separato.
+- **Secondo avvio di FLIP.** Se Windows nega l'accesso all'istanza già aperta, FLIP spiega come chiuderla e riaprirla normalmente. Grazie ad [AlphaGolf-sec](https://github.com/AlphaGolf-sec) per la segnalazione e la [PR #2](https://github.com/thetinyfoundry/FLIP/pull/2).
 
 ## [0.6.0] - 2026-11-18 ("AURA Edition")
 

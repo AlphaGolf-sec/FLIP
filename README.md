@@ -1,8 +1,8 @@
 **English** · [Italiano](README.it.md)
 
-# FLIP v0.6.0 — AURA Edition
+# FLIP v0.6.1 — AURA Edition
 
-![Version](https://img.shields.io/badge/version-v0.6.0%20AURA%20Edition-FF7A18?style=flat-square)
+![Version](https://img.shields.io/badge/version-v0.6.1%20AURA%20Edition-FF7A18?style=flat-square)
 ![Platform](https://img.shields.io/badge/Windows-10%20%2F%2011%20x64-1A1C23?style=flat-square)
 [![License](https://img.shields.io/badge/license-GPL--3.0--only-2ECC71?style=flat-square)](LICENSE)
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-Support-FFDD00?style=flat-square&logo=buymeacoffee&logoColor=000000)](https://www.buymeacoffee.com/1berimHY9M)
@@ -11,15 +11,15 @@ FLIP is a local file converter for Windows. Drag one or more files from File Exp
 
 ![FLIP conversion wheel](docs/assets/wheel.png)
 
-[Demo video](docs/assets/flip-demo.mp4) · [v0.6.0 release notes](https://github.com/thetinyfoundry/FLIP/releases/tag/v0.6.0) · [Changelog](CHANGELOG.md) · [Windows guide](docs/WINDOWS-INSTALL.md)
+[Demo video](docs/assets/flip-demo.mp4) · [v0.6.1 release notes](https://github.com/thetinyfoundry/FLIP/releases/tag/v0.6.1) · [Changelog](CHANGELOG.md) · [Windows guide](docs/WINDOWS-INSTALL.md)
 
-## Install or upgrade to v0.6.0
+## Install or upgrade to v0.6.1
 
 1. Install the [.NET 10 Windows Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/10.0) on Windows 10 or 11 x64.
-2. Download [`Flip-0.6.0-win-x64.zip`](https://github.com/thetinyfoundry/FLIP/releases/download/v0.6.0/Flip-0.6.0-win-x64.zip) from the [v0.6.0 release](https://github.com/thetinyfoundry/FLIP/releases/tag/v0.6.0) and extract the entire archive.
+2. Download [`Flip-0.6.1-win-x64.zip`](https://github.com/thetinyfoundry/FLIP/releases/download/v0.6.1/Flip-0.6.1-win-x64.zip) from the [v0.6.1 release](https://github.com/thetinyfoundry/FLIP/releases/tag/v0.6.1) and extract the entire archive.
 3. Close FLIP and run `Installa-FLIP.cmd` from the extracted folder. The installer verifies the package and copies it into `%LOCALAPPDATA%\Programs\Flip`.
 
-**Already using FLIP? Update the entire installation to v0.6.0.** Run the installer from the new archive. For a manual installation, replace the entire application folder with the contents of the new `payload` folder. Keep your documents and settings separate from the application folder.
+**Already using FLIP? Update the entire installation to v0.6.1.** Run the installer from the new archive. For a manual installation, replace the entire application folder with the contents of the new `payload` folder. Keep your documents and settings separate from the application folder.
 
 To uninstall, run `Disinstalla-FLIP.cmd` from the extracted package.
 
