@@ -2,6 +2,7 @@ using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Text.Json;
+using System.Xml.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -989,6 +990,11 @@ internal static class InputTests
             docxMustPrimary.All(ext => docxWheel.PrimaryRing.Contains(ext)) &&
             docxWheel.AllReachable.Contains("png") &&
             docxWheel.AllReachable.Contains("jpg");
+        var docxPdfSettings = new FlipSettings { EnginePriorityOrder = ["pdf_builtin"] }.CreateSnapshot();
+        string expectedDocxPdfEngine = new LibreOfficeEngine().IsAvailable(docxPdfSettings) ? "libreoffice" : "pdf_builtin";
+        checks["matrix_docx_to_pdf_prefers_layout_preserving_engine"] =
+            RoutePlanner.TryPlanRoute("docx", "pdf", docxPdfSettings, out var docxPdfRoute) &&
+            docxPdfRoute is { Hops.Count: 1 } && docxPdfRoute.Hops[0].Engine.Id == expectedDocxPdfEngine;
 
         // Scenario .xlsx e .csv
         var xlsxWheel = InspectWheelFor("xlsx", defaultSettings);
@@ -1079,6 +1085,32 @@ internal static class InputTests
             string stepMd = StepConvert(srcTxt, "md");
             string stepHtml = StepConvert(stepMd, "html");
             string stepDocx = StepConvert(stepHtml, "docx");
+            if (new LibreOfficeEngine().IsAvailable(matrixSettings))
+            {
+                // A custom page size is lost if the DOCX takes the built-in text-to-PDF route.
+                string layoutDocx = Path.Combine(workDir, "layout.docx");
+                File.Copy(stepDocx, layoutDocx);
+                using (var zip = System.IO.Compression.ZipFile.Open(layoutDocx, System.IO.Compression.ZipArchiveMode.Update))
+                {
+                    var entry = zip.GetEntry("word/document.xml")!;
+                    XDocument document;
+                    using (var stream = entry.Open()) document = XDocument.Load(stream);
+                    XNamespace word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+                    var body = document.Root!.Element(word + "body")!;
+                    body.Element(word + "sectPr")?.Remove();
+                    body.Add(new XElement(word + "sectPr",
+                        new XElement(word + "pgSz", new XAttribute(word + "w", 10080), new XAttribute(word + "h", 12960))));
+                    entry.Delete();
+                    using var output = zip.CreateEntry("word/document.xml").Open();
+                    document.Save(output);
+                }
+                using var layoutPdf = UglyToad.PdfPig.PdfDocument.Open(StepConvert(layoutDocx, "pdf"));
+                var page = layoutPdf.GetPage(1);
+                bool preservesPageSize = Math.Abs(page.Width - 504) <= 2 && Math.Abs(page.Height - 648) <= 2;
+                checks["matrix_e2e_docx_to_pdf_preserves_page_size"] = preservesPageSize;
+                if (!preservesPageSize)
+                    Evidence.Log("test.docx-pdf.page-size", new { page.Width, page.Height });
+            }
             string stepOdt = StepConvert(stepDocx, "odt");
             string stepRtf = StepConvert(stepOdt, "rtf");
             string stepPdf = StepConvert(stepRtf, "pdf");

@@ -355,6 +355,9 @@ public static class RoutePlanner
                 // OpenXML HTML/Markdown is a text/table export. Prefer the richer document reader.
                 if (engine.Id == "openxml_builtin" && (edge.SourceExtension is "docx" or "odt") &&
                     (edge.TargetExtension is "html" or "md")) cost += 20;
+                // DOCX text extraction discards the page layout. Prefer LibreOffice whenever available.
+                if (IsDocxToPdf(edge.SourceExtension, edge.TargetExtension) && engine.Id == "pdf_builtin")
+                    cost += 15;
                 var adjusted = new ConversionEdge(edge.SourceExtension, edge.TargetExtension, edge.EngineId, cost);
                 outgoing.Add(new PlannedHop(adjusted, engine));
             }
@@ -836,11 +839,19 @@ public static class RoutePlanner
 
     private static Task<EngineExecutionResult> ConvertHopAsync(PlannedHop hop, ConversionContext context)
     {
+        bool stripMetadata = context.CustomParameters.TryGetValue("strip_metadata", out var s) &&
+            (s.Equals("true", StringComparison.OrdinalIgnoreCase) || s == "1");
+        if (stripMetadata && hop.Engine.Id == "libreoffice" &&
+            IsDocxToPdf(context.SourceExtension, context.TargetExtension) &&
+            _engines.TryGetValue("pdf_builtin", out var privacyEngine))
+        {
+            // LibreOffice can copy document properties into PDF. The built-in exporter honors this preset.
+            return privacyEngine.ConvertAsync(context);
+        }
+
         if (hop.Engine.Id == "pdf_builtin" && context.TargetExtension == "pdf" &&
             Policy.Images.Contains("." + context.SourceExtension))
         {
-            bool stripMetadata = context.CustomParameters.TryGetValue("strip_metadata", out var s) &&
-                (s.Equals("true", StringComparison.OrdinalIgnoreCase) || s == "1");
             // Reuse the historical EXIF-aware reader inside the isolated planner job.
             using var bitmap = ConversionEngine.ReadImage(context.InputFilePath);
             ConversionEngine.ImagePdf(bitmap, context.OutputFilePath, stripMetadata);
@@ -849,6 +860,8 @@ public static class RoutePlanner
         }
         return hop.Engine.ConvertAsync(context);
     }
+
+    private static bool IsDocxToPdf(string source, string target) => source == "docx" && target == "pdf";
 
     private static void AddStagedOutputs(EngineExecutionResult result, string requestedPath, PlannedHop hop, List<string> outputs)
     {
