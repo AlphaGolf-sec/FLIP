@@ -787,6 +787,7 @@ public sealed class LibreOfficeEngine : IConversionEngine
 
     public LibreOfficeEngine()
     {
+        _supportedEdges.Add(new ConversionEdge("docx", "doc", Id, 10));
         foreach (var src in OfficeSourceFormats)
             foreach (var dst in OfficeTargetFormats)
                 if (src != dst)
@@ -833,7 +834,7 @@ public sealed class LibreOfficeEngine : IConversionEngine
                     "--nologo",
                     "--nodefault",
                     "--norestore",
-                    "--convert-to", dstExt,
+                    "--convert-to", dstExt == "doc" ? "doc:MS Word 97" : dstExt,
                     "--outdir", tempOutDir,
                     srcPath
                 };

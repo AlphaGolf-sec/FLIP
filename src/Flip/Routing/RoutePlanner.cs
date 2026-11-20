@@ -274,7 +274,7 @@ public static class RoutePlanner
             var next = new Dictionary<(string Extension, bool HasTextBridge), (PlannedHop[] Hops, int Cost)>();
             foreach (var (state, path) in frontier)
             {
-                if (depth > 0 && state.Extension == "pdfa") continue;
+                if (depth > 0 && state.Extension is "pdfa" or "doc") continue;
 
                 // Wrapping pixels in PDF adds no text or document structure to extract.
                 if (rasterSource && state.Extension == "pdf") continue;
@@ -422,6 +422,15 @@ public static class RoutePlanner
     {
         if (hops.Count == 0) return false;
         if (CanonicalExtension(sourceExtension) == CanonicalExtension(targetExtension)) return false;
+
+        if (IsDocxToPdf(sourceExtension, targetExtension))
+            return hops.Count == 1 && hops[0].Engine.Id == "libreoffice";
+
+        // This Word export reconstructs editable text from the PDF, then saves a real Word 97–2003 file.
+        if (targetExtension == "doc")
+            return sourceExtension == "pdf" && hops.Count == 2 &&
+                hops[0].Edge.TargetExtension == "docx" && hops[0].Engine.Id == "pdf_builtin" &&
+                hops[1].Engine.Id == "libreoffice";
 
         var sourceCategory = FormatRegistry.Find(sourceExtension)?.Category;
         var targetCategory = FormatRegistry.Find(targetExtension)?.Category;
@@ -701,6 +710,11 @@ public static class RoutePlanner
         IProgress<double>? progress,
         CancellationToken ct)
     {
+        if (IsDocxToPdf(route.SourceExtension, route.TargetExtension) && RequestsMetadataRemoval(parameters))
+            throw new IOException(Loc.T(
+                "La conversione DOCX → PDF con impaginazione non supporta la rimozione dei metadati. Disattiva la rimozione nel preset PDF per continuare.",
+                "Layout-preserving DOCX to PDF conversion does not support metadata removal. Turn off metadata removal in the PDF preset to continue."));
+
         IReadOnlyList<string> inputs = [source];
         for (int i = 0; i < route.Hops.Count; i++)
         {
@@ -839,13 +853,12 @@ public static class RoutePlanner
 
     private static Task<EngineExecutionResult> ConvertHopAsync(PlannedHop hop, ConversionContext context)
     {
-        bool stripMetadata = context.CustomParameters.TryGetValue("strip_metadata", out var s) &&
-            (s.Equals("true", StringComparison.OrdinalIgnoreCase) || s == "1");
+        bool stripMetadata = RequestsMetadataRemoval(context.CustomParameters);
         if (stripMetadata && hop.Engine.Id == "libreoffice" &&
             IsDocxToPdf(context.SourceExtension, context.TargetExtension) &&
             _engines.TryGetValue("pdf_builtin", out var privacyEngine))
         {
-            // LibreOffice can copy document properties into PDF. The built-in exporter honors this preset.
+            // Retain the existing behavior for intermediate PDFs in multi-hop routes.
             return privacyEngine.ConvertAsync(context);
         }
 
@@ -862,6 +875,10 @@ public static class RoutePlanner
     }
 
     private static bool IsDocxToPdf(string source, string target) => source == "docx" && target == "pdf";
+
+    private static bool RequestsMetadataRemoval(Dictionary<string, string>? parameters) =>
+        parameters is not null && parameters.TryGetValue("strip_metadata", out var value) &&
+        (value.Equals("true", StringComparison.OrdinalIgnoreCase) || value == "1");
 
     private static void AddStagedOutputs(EngineExecutionResult result, string requestedPath, PlannedHop hop, List<string> outputs)
     {
