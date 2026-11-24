@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
+using Flip.Engines;
 
 namespace Flip;
 
@@ -400,66 +401,17 @@ internal static class DataTools
         return obj;
     }
 
-    static JsonNode ParseYaml(string raw)
+    // Same parser as the wheel: nested lists and multi-key items must survive the conversion.
+    static JsonNode? ParseYaml(string raw)
     {
-        var lines = raw.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
-        var rootObj = new JsonObject();
-        var rootArr = new JsonArray();
-        bool isArrayRoot = false;
-        string? currentSection = null;
-        JsonObject? currentSubObj = null;
-
-        foreach (string rawLine in lines)
+        try
         {
-            string trimmed = rawLine.Trim();
-            if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith('#') || trimmed == "---" || trimmed == "...") continue;
-
-            int indent = rawLine.TakeWhile(c => c == ' ').Count();
-            if (trimmed.StartsWith("- "))
-            {
-                string itemText = trimmed[2..].Trim();
-                int colon = itemText.IndexOf(':');
-                if (colon > 0)
-                {
-                    var itemObj = new JsonObject
-                    {
-                        [itemText[..colon].Trim().Trim('"', '\'')] = ParseScalarNode(itemText[(colon + 1)..].Trim())
-                    };
-                    if (currentSection != null && rootObj[currentSection] is JsonArray secArr) secArr.Add(itemObj);
-                    else { isArrayRoot = true; rootArr.Add(itemObj); }
-                }
-                else
-                {
-                    if (currentSection != null && rootObj[currentSection] is JsonArray secArr) secArr.Add(ParseScalarNode(itemText));
-                    else { isArrayRoot = true; rootArr.Add(ParseScalarNode(itemText)); }
-                }
-                continue;
-            }
-
-            int idx = trimmed.IndexOf(':');
-            if (idx > 0)
-            {
-                string key = trimmed[..idx].Trim().Trim('"', '\'');
-                string val = trimmed[(idx + 1)..].Trim();
-                if (string.IsNullOrEmpty(val))
-                {
-                    currentSection = key;
-                    currentSubObj = new JsonObject();
-                    rootObj[key] = currentSubObj;
-                }
-                else if (indent > 0 && currentSubObj != null)
-                {
-                    currentSubObj[key] = ParseScalarNode(val);
-                }
-                else
-                {
-                    currentSection = null;
-                    currentSubObj = null;
-                    rootObj[key] = ParseScalarNode(val);
-                }
-            }
+            return DataSerializationEngine.ParseYaml(raw);
         }
-        return isArrayRoot && rootObj.Count == 0 ? rootArr : rootObj;
+        catch (Exception ex) when (ex is FormatException or ArgumentException or JsonException)
+        {
+            throw new IOException("YAML non valido: " + ex.Message);
+        }
     }
 
     static JsonNode? ParseScalarNode(string value)
@@ -470,6 +422,7 @@ internal static class DataTools
         if (v.Equals("null", StringComparison.OrdinalIgnoreCase) || v == "~") return null;
         if (v.Equals("true", StringComparison.OrdinalIgnoreCase)) return JsonValue.Create(true);
         if (v.Equals("false", StringComparison.OrdinalIgnoreCase)) return JsonValue.Create(false);
+        if (DataSerializationEngine.IsNumericIdentifier(v)) return JsonValue.Create(v);
         if (long.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out long l)) return JsonValue.Create(l);
         if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out double d) && !double.IsNaN(d) && !double.IsInfinity(d)) return JsonValue.Create(d);
         return JsonValue.Create(v);
@@ -519,9 +472,19 @@ internal static class DataTools
         return node.ToJsonString() + "\n";
     }
 
+    // Values built by the CSV, XML and YAML parsers are not backed by a JsonElement.
+    static JsonElement ReadJsonElement(JsonValue value)
+    {
+        if (value.TryGetValue(out JsonElement element))
+            return element;
+
+        using JsonDocument document = JsonDocument.Parse(value.ToJsonString());
+        return document.RootElement.Clone();
+    }
+
     static string FormatYamlScalar(JsonValue val)
     {
-        var el = val.GetValue<JsonElement>();
+        var el = ReadJsonElement(val);
         return el.ValueKind switch
         {
             JsonValueKind.True => "true",
@@ -533,7 +496,10 @@ internal static class DataTools
     }
 
     static bool NeedsYamlQuotes(string s) =>
-        string.IsNullOrEmpty(s) || s.Contains(':') || s.Contains('#') || s.Contains('\n') || s.Contains('\r') || s.Contains('"') || s.StartsWith(' ') || s.EndsWith(' ') || s.StartsWith('-');
+        string.IsNullOrEmpty(s) || s.Contains(':') || s.Contains('#') || s.Contains('\n') || s.Contains('\r') || s.Contains('"') || s.StartsWith(' ') || s.EndsWith(' ') || s.StartsWith('-') ||
+        "[{&*!|>%@`',?".Contains(s[0]) || DataSerializationEngine.IsNumericIdentifier(s) ||
+        // Text that would read back as a number, boolean or null.
+        ParseScalarNode(s) is not JsonValue scalar || !scalar.TryGetValue<string>(out _);
 
     static string ToXml(JsonNode? node)
     {
@@ -548,7 +514,7 @@ internal static class DataTools
         if (node is null) return;
         if (node is JsonValue val)
         {
-            var el = val.GetValue<JsonElement>();
+            var el = ReadJsonElement(val);
             parent.Value = el.ValueKind == JsonValueKind.String ? (el.GetString() ?? "") : el.GetRawText();
             return;
         }
@@ -635,7 +601,7 @@ internal static class DataTools
         if (node is null) return "";
         if (node is JsonValue v)
         {
-            var el = v.GetValue<JsonElement>();
+            var el = ReadJsonElement(v);
             return el.ValueKind == JsonValueKind.String ? (el.GetString() ?? "") : el.GetRawText();
         }
         return node.ToJsonString();

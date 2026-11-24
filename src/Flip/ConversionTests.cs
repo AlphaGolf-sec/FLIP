@@ -113,6 +113,69 @@ internal static class ConversionTests
             hashes[csvFromJson] = Hash(csvFromJson);
             var jsonRoundtrip = await Do(csvFromJson, "JSON");
             Check("JSON → CSV → JSON conserva dati", File.ReadAllText(jsonRoundtrip.Single()).Contains("Milano") && File.ReadAllText(jsonRoundtrip.Single()).Contains("Giulia"));
+            // YAML, XML and CSV sources build nodes that are not backed by JsonElement.
+            string yamlFile = Path.Combine(root, "rubrica.yaml"), xmlFile = Path.Combine(root, "scheda.xml"), csvFile = Path.Combine(root, "elenco.csv");
+            File.WriteAllText(yamlFile, "- nome: Anna\n  eta: 30\n  attivo: true\n- nome: Luca\n  eta: 41\n  attivo: false\n", new UTF8Encoding(false));
+            File.WriteAllText(xmlFile, "<scheda><nome>Anna</nome><eta>30</eta></scheda>", new UTF8Encoding(false));
+            File.WriteAllText(csvFile, "nome,eta\nAnna,30\nLuca,41\n", new UTF8Encoding(false));
+            foreach (string p in new[] { yamlFile, xmlFile, csvFile }) hashes[p] = Hash(p);
+            var yamlOutputs = await Do(yamlFile, "JSON", "XML", "CSV", "HTML", "MD");
+            Check("YAML → CSV conserva tutte le righe e colonne", ReadText(yamlOutputs, ".csv") == "nome,eta,attivo\nAnna,30,true\nLuca,41,false\n");
+            string yamlAsXml = ReadText(yamlOutputs, ".xml");
+            Check("YAML → XML conserva tutti i valori", yamlAsXml.Contains("<nome>Anna</nome>") && yamlAsXml.Contains("<eta>41</eta>") && yamlAsXml.Contains("<attivo>false</attivo>"));
+            var xmlOutputs = await Do(xmlFile, "YAML", "CSV", "JSON");
+            Check("XML → YAML conserva i valori", ReadText(xmlOutputs, ".yaml") == "nome: Anna\neta: 30\n");
+            Check("XML → CSV conserva i valori", ReadText(xmlOutputs, ".csv") == "key,value\nnome,Anna\neta,30\n");
+            var csvOutputs = await Do(csvFile, "YAML", "XML", "HTML", "MD");
+            Check("CSV → YAML conserva i valori", ReadText(csvOutputs, ".yaml") == "- nome: Anna\n  eta: 30\n- nome: Luca\n  eta: 41\n");
+            string csvAsXml = ReadText(csvOutputs, ".xml");
+            Check("CSV → XML conserva i valori", csvAsXml.Contains("<nome>Anna</nome>") && csvAsXml.Contains("<eta>41</eta>"));
+            Check("CSV → HTML conserva i valori", ReadText(csvOutputs, ".html").Contains("<td>Luca</td><td>41</td>"));
+            string nestedYaml = Path.Combine(root, "annidato.yaml");
+            File.WriteAllText(nestedYaml, "nome: Flip\nlista:\n  - uno\n  - due\n", new UTF8Encoding(false));
+            hashes[nestedYaml] = Hash(nestedYaml);
+            string nestedJson = ReadText(await Do(nestedYaml, "JSON"), ".json");
+            Check("YAML → JSON conserva le liste annidate", nestedJson.Contains("uno") && nestedJson.Contains("due"));
+            string badYaml = Path.Combine(root, "errato.yaml"); File.WriteAllText(badYaml, "a: 1\n\tb: 2\n", new UTF8Encoding(false));
+            var badYamlResult = await ConversionEngine.Convert([badYaml], ["JSON"], CancellationToken.None);
+            Check("YAML non valido rifiutato", badYamlResult[0].Error is { } yamlError && yamlError.Contains("YAML non valido") && badYamlResult[0].Outputs.Length == 0);
+            string zeroCsv = Path.Combine(root, "codici.csv");
+            File.WriteAllText(zeroCsv, "cap,tel,codice,zero,mezzo,neg,intero,meno,intl\n00123,0815551234,007,0,0.5,-0.25,42,-15,+39081\n", new UTF8Encoding(false));
+            hashes[zeroCsv] = Hash(zeroCsv);
+            var zeroOutputs = await Do(zeroCsv, "JSON", "YAML", "XML", "HTML", "MD");
+            Check("CLI: CSV → JSON conserva gli zeri iniziali", KeepsIdentifiers(ReadText(zeroOutputs, ".json")));
+            string zeroYaml = zeroOutputs.FirstOrDefault(p => p.EndsWith(".yaml")) ?? "";
+            Check("CLI: CSV → YAML mantiene i codici come testo", ReadText(zeroOutputs, ".yaml").Contains("cap: \"00123\"\n") && ReadText(zeroOutputs, ".yaml").Contains("intero: 42\n"));
+            Check("CLI: CSV → XML conserva gli zeri iniziali", ReadText(zeroOutputs, ".xml").Contains("<cap>00123</cap>"));
+            Check("CLI: CSV → HTML conserva gli zeri iniziali", ReadText(zeroOutputs, ".html").Contains("<td>00123</td><td>0815551234</td><td>007</td><td>0</td>"));
+            if (zeroYaml.Length > 0)
+            {
+                hashes[zeroYaml] = Hash(zeroYaml);
+                Check("CLI: CSV → YAML → JSON conserva gli zeri iniziali", KeepsIdentifiers(ReadText(await Do(zeroYaml, "JSON"), ".json")));
+            }
+            var dataEngine = new Flip.Engines.DataSerializationEngine();
+            string engineJson = Path.Combine(root, "codici-ruota.json"), engineYaml = Path.Combine(root, "codici-ruota.yaml"), engineBack = Path.Combine(root, "codici-ruota-ritorno.json");
+            async Task<bool> EngineConvert(string input, string output) => (await dataEngine.ConvertAsync(new Flip.Routing.ConversionContext
+            {
+                InputFilePath = input, OutputFilePath = output,
+                SourceExtension = Path.GetExtension(input).TrimStart('.'), TargetExtension = Path.GetExtension(output).TrimStart('.')
+            })).Success;
+            Check("Ruota: CSV → JSON conserva gli zeri iniziali", await EngineConvert(zeroCsv, engineJson) && KeepsIdentifiers(File.ReadAllText(engineJson)));
+            Check("Ruota: CSV → YAML → JSON conserva gli zeri iniziali", await EngineConvert(zeroCsv, engineYaml) && await EngineConvert(engineYaml, engineBack) && KeepsIdentifiers(File.ReadAllText(engineBack)));
+            static bool KeepsIdentifiers(string json)
+            {
+                if (json.Length == 0) return false;
+                using var parsed = JsonDocument.Parse(json);
+                var row = parsed.RootElement[0];
+                return row.GetProperty("cap").ValueEquals("00123") && row.GetProperty("tel").ValueEquals("0815551234") &&
+                    row.GetProperty("codice").ValueEquals("007") && row.GetProperty("intl").ValueEquals("+39081") &&
+                    row.GetProperty("zero").GetRawText() == "0" && row.GetProperty("mezzo").GetRawText() == "0.5" &&
+                    row.GetProperty("neg").GetRawText() == "-0.25" && row.GetProperty("intero").GetRawText() == "42" &&
+                    row.GetProperty("meno").GetRawText() == "-15";
+            }
+            // A missing output must fail the check, not abort the suite.
+            static string ReadText(string[] outputs, string extension) =>
+                outputs.FirstOrDefault(p => p.EndsWith(extension)) is { } path ? File.ReadAllText(path).ReplaceLineEndings("\n") : "";
             if (MediaTools.HasFfmpeg)
             {
                 string wavFile = Path.Combine(root, "tono.wav");

@@ -283,7 +283,7 @@ public sealed class DataSerializationEngine : IConversionEngine
 
     private readonly record struct YamlLine(int Number, int Indent, string Text);
 
-    private static JsonNode? ParseYaml(string raw)
+    internal static JsonNode? ParseYaml(string raw)
     {
         var lines = new List<YamlLine>();
         using var reader = new StringReader(raw);
@@ -638,6 +638,10 @@ public sealed class DataSerializationEngine : IConversionEngine
         return positions;
     }
 
+    /// <summary>Postal codes, phone numbers and IDs such as 00123, 007 or +39081 are text: a number would drop the prefix.</summary>
+    internal static bool IsNumericIdentifier(string value) =>
+        Regex.IsMatch(value, @"^(?:[+-]?0[0-9]|\+[0-9])");
+
     private static JsonNode? ParseScalar(string value)
     {
         string v = value.Trim();
@@ -646,6 +650,7 @@ public sealed class DataSerializationEngine : IConversionEngine
         if (v.Equals("null", StringComparison.OrdinalIgnoreCase) || v == "~") return null;
         if (v.Equals("true", StringComparison.OrdinalIgnoreCase)) return JsonValue.Create(true);
         if (v.Equals("false", StringComparison.OrdinalIgnoreCase)) return JsonValue.Create(false);
+        if (IsNumericIdentifier(v)) return JsonValue.Create(v);
         if (long.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out long l)) return JsonValue.Create(l);
         if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out double d) && !double.IsNaN(d) && !double.IsInfinity(d)) return JsonValue.Create(d);
         return JsonValue.Create(v);
