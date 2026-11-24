@@ -29,6 +29,9 @@ public static class CliResolver
         ["tesseract"] = new(["tesseract.exe", "tesseract"], ["Tesseract-OCR", "Tesseract"])
     };
 
+    /// <summary>Solo per test automatizzati: simula un PC pulito senza motori CLI esterni installati.</summary>
+    internal static bool SuppressAutoDiscoveryForTest { get; set; }
+
     /// <summary>Usa lo snapshot del job, oppure le impostazioni correnti se omesso.</summary>
     public static string? Resolve(string engineId, FlipSettings? settings = null)
     {
@@ -42,7 +45,9 @@ public static class CliResolver
             string path = Environment.ExpandEnvironmentVariables(configuredPath.Trim().Trim('"'));
             if (engineId == "whisper" && WhisperLocator.IsExcludedWhisperExecutable(path))
             {
-                string? replacement = WhisperLocator.FindBestExecutable(SearchFolders(engineId, engine.InstallationFolders));
+                string? replacement = SuppressAutoDiscoveryForTest
+                    ? null
+                    : WhisperLocator.FindBestExecutable(SearchFolders(engineId, engine.InstallationFolders));
                 if (replacement != null && settings == null)
                 {
                     try { SettingsStore.Current.Update(s => s.CustomEnginePaths["whisper"] = replacement); }
@@ -52,6 +57,8 @@ public static class CliResolver
             }
             if (Path.IsPathFullyQualified(path) && File.Exists(path)) return Path.GetFullPath(path);
         }
+
+        if (SuppressAutoDiscoveryForTest) return null;
 
         if (engineId == "whisper")
         {
@@ -782,7 +789,7 @@ public sealed class LibreOfficeEngine : IConversionEngine
 
     private static readonly string[] OfficeTargetFormats =
     [
-        "pdf", "docx", "odt", "xlsx", "ods", "pptx", "odp", "html", "txt"
+        "pdf", "docx", "odt", "rtf", "xlsx", "ods", "pptx", "odp", "html", "txt"
     ];
 
     public LibreOfficeEngine()

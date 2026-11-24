@@ -86,7 +86,9 @@ public sealed class OfficeOpenXmlEngine : IConversionEngine
 
             context.Progress?.Report(0.10);
 
-            if (srcExt is "docx" && dstExt is "txt" or "md" or "html")
+            if (srcExt == "docx" && dstExt == "rtf")
+                ConvertDocxToRtf(srcPath, dstPath);
+            else if (srcExt is "docx" && dstExt is "txt" or "md" or "html")
                 ExtractDocx(srcPath, dstPath, dstExt);
             else if (srcExt is "odt" && dstExt is "txt" or "md" or "html")
                 ExtractOdt(srcPath, dstPath, dstExt);
@@ -937,19 +939,22 @@ public sealed class OfficeOpenXmlEngine : IConversionEngine
         // Rimuovi i gruppi RTF di intestazione (\fonttbl, \colortbl, \stylesheet, \info, \*\...)
         string text = Regex.Replace(rtf, @"\{\\\*\\[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", "");
         text = Regex.Replace(text, @"\{\\(?:fonttbl|colortbl|stylesheet|info|pict)\b[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", "");
-        text = Regex.Replace(text, @"\\(?:par|line|row)\b\s?", "\n");
-        text = Regex.Replace(text, @"\\tab\b\s?", "\t");
+        text = Regex.Replace(text, @"\\(?:par|line|row|page)\b\s?", "\n");
+        text = Regex.Replace(text, @"\\(?:tab|cell)\b\s?", "\t");
+        // Prima i codici Unicode (\uN? oppure \uN\'xx) così il byte ANSI di fallback non duplica il carattere.
+        text = Regex.Replace(text, @"\\u(-?\d+)(?:\s?\\'[0-9a-fA-F]{2}|\s?\??)", m =>
+        {
+            int code = int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+            if (code < 0) code += 65536;
+            if (code is >= 0xD800 and <= 0xDFFF) return ((char)code).ToString();
+            return char.ConvertFromUtf32(Math.Clamp(code, 0, 0x10FFFF));
+        });
         text = Regex.Replace(text, @"\\'([0-9a-fA-F]{2})", m =>
         {
             byte b = Convert.ToByte(m.Groups[1].Value, 16);
             return ((char)b).ToString();
         });
-        text = Regex.Replace(text, @"\\u(-?\d+)\??", m =>
-        {
-            int code = int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
-            if (code < 0) code += 65536;
-            return char.ConvertFromUtf32(Math.Clamp(code, 0, 0x10FFFF));
-        });
+        text = Regex.Replace(text, @"\\([\\{}])", "$1");
         text = Regex.Replace(text, @"\\[a-zA-Z]+-?\d*\s?", "");
         text = text.Replace("{", "").Replace("}", "");
         return text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n')
@@ -1122,5 +1127,1580 @@ public sealed class OfficeOpenXmlEngine : IConversionEngine
             File.WriteAllText(dstPath, sb.ToString(), utf8);
         }
     }
+
+    // ── Rich OpenXML Parser & High-Fidelity RTF Writer ───────────────────────
+
+    private static void ConvertDocxToRtf(string docxPath, string rtfPath)
+    {
+        var richDoc = ParseDocxToRichDocument(docxPath);
+        if (!richDoc.HasAnyContent())
+            throw new IOException("File sorgente vuoto o privo di testo.");
+        GenerateRichRtf(richDoc, rtfPath);
+    }
+
+    internal static RichDocument? TryReadRichDocumentForPdf(string srcPath, string srcExt)
+    {
+        string ext = srcExt.TrimStart('.').ToLowerInvariant();
+        if (ext == "docx")
+            return ParseDocxToRichDocument(srcPath);
+        if (ext == "md")
+            return ParseMarkdownToRichDocument(File.ReadAllText(srcPath, Encoding.UTF8));
+        if (ext is "odt" or "rtf" or "html")
+            return BuildRichDocumentFromStructuredBlocks(ReadStructuredBlocks(srcPath, ext));
+        return null;
+    }
+
+    internal static RichDocument ParseDocxToRichDocument(string docxPath)
+    {
+        using var zip = ZipFile.OpenRead(docxPath);
+        var docEntry = zip.GetEntry("word/document.xml")
+            ?? throw new IOException("document.xml non trovato nel DOCX.");
+
+        using var docStream = docEntry.Open();
+        var xDoc = XDocument.Load(docStream, LoadOptions.PreserveWhitespace);
+        XNamespace ns = xDoc.Root?.Name.Namespace ?? W;
+        var body = xDoc.Root?.Element(ns + "body")
+            ?? throw new IOException("Struttura DOCX non valida: body non trovato.");
+
+        var (majorFont, minorFont) = ReadThemeFonts(zip);
+        var styles = ReadStyles(zip, ns, majorFont, minorFont);
+        var numbering = ReadNumbering(zip, ns);
+
+        var result = new RichDocument
+        {
+            DefaultFontFamily = styles.DefaultRun.FontFamily ?? minorFont,
+            DefaultFontSizePt = styles.DefaultRun.FontSizePt ?? 11f
+        };
+
+        ApplySectionPageLayout(body.Element(ns + "sectPr"), ns, result);
+
+        var listCounters = new Dictionary<(string NumId, int Level), int>();
+        ParseContainerBlocks(body, ns, result.Blocks, styles, numbering, listCounters, majorFont, minorFont);
+
+        return result;
+    }
+
+    private static void ApplySectionPageLayout(XElement? sectPr, XNamespace ns, RichDocument doc)
+    {
+        if (sectPr == null) return;
+        var pgSz = sectPr.Element(ns + "pgSz");
+        if (pgSz != null)
+        {
+            float? w = TryParseTwipsToPt((string?)pgSz.Attribute(ns + "w"));
+            float? h = TryParseTwipsToPt((string?)pgSz.Attribute(ns + "h"));
+            if (w is >= 180f and <= 2400f && h is >= 180f and <= 2400f)
+            {
+                doc.PageWidthPt = w.Value;
+                doc.PageHeightPt = h.Value;
+            }
+        }
+
+        var pgMar = sectPr.Element(ns + "pgMar");
+        if (pgMar != null)
+        {
+            float? top = TryParseTwipsToPt((string?)pgMar.Attribute(ns + "top"));
+            float? bottom = TryParseTwipsToPt((string?)pgMar.Attribute(ns + "bottom"));
+            float? left = TryParseTwipsToPt((string?)pgMar.Attribute(ns + "left"));
+            float? right = TryParseTwipsToPt((string?)pgMar.Attribute(ns + "right"));
+            if (top is >= 12f and <= 180f) doc.MarginTopPt = top.Value;
+            if (bottom is >= 12f and <= 180f) doc.MarginBottomPt = bottom.Value;
+            if (left is >= 12f and <= 180f) doc.MarginLeftPt = left.Value;
+            if (right is >= 12f and <= 180f) doc.MarginRightPt = right.Value;
+        }
+    }
+
+    private static (string MajorFont, string MinorFont) ReadThemeFonts(ZipArchive zip)
+    {
+        string major = "Calibri Light";
+        string minor = "Calibri";
+        try
+        {
+            var entry = zip.GetEntry("word/theme/theme1.xml");
+            if (entry == null) return (major, minor);
+            using var stream = entry.Open();
+            var doc = XDocument.Load(stream);
+            string? maj = (string?)doc.Descendants(A + "majorFont").FirstOrDefault()?.Element(A + "latin")?.Attribute("typeface");
+            string? min = (string?)doc.Descendants(A + "minorFont").FirstOrDefault()?.Element(A + "latin")?.Attribute("typeface");
+            if (!string.IsNullOrWhiteSpace(maj)) major = maj.Trim();
+            if (!string.IsNullOrWhiteSpace(min)) minor = min.Trim();
+        }
+        catch { /* best effort theme font fallback */ }
+        return (major, minor);
+    }
+
+    private sealed class PartialParagraphStyle
+    {
+        public int? HeadingLevel;
+        public RichAlignment? Alignment;
+        public float? SpaceBeforePt;
+        public float? SpaceAfterPt;
+        public float? LineSpacingMultiplier;
+        public float? IndentLeftPt;
+        public float? IndentRightPt;
+        public float? FirstLineIndentPt;
+        public bool? PageBreakBefore;
+        public string? NumId;
+        public int? ListLevel;
+        public string? BackgroundColorHex;
+        public bool? HasBottomBorder;
+
+        public void MergeFrom(PartialParagraphStyle other)
+        {
+            if (other.HeadingLevel.HasValue) HeadingLevel = other.HeadingLevel;
+            if (other.Alignment.HasValue) Alignment = other.Alignment;
+            if (other.SpaceBeforePt.HasValue) SpaceBeforePt = other.SpaceBeforePt;
+            if (other.SpaceAfterPt.HasValue) SpaceAfterPt = other.SpaceAfterPt;
+            if (other.LineSpacingMultiplier.HasValue) LineSpacingMultiplier = other.LineSpacingMultiplier;
+            if (other.IndentLeftPt.HasValue) IndentLeftPt = other.IndentLeftPt;
+            if (other.IndentRightPt.HasValue) IndentRightPt = other.IndentRightPt;
+            if (other.FirstLineIndentPt.HasValue) FirstLineIndentPt = other.FirstLineIndentPt;
+            if (other.PageBreakBefore.HasValue) PageBreakBefore = other.PageBreakBefore;
+            if (other.NumId != null) NumId = other.NumId;
+            if (other.ListLevel.HasValue) ListLevel = other.ListLevel;
+            if (other.BackgroundColorHex != null) BackgroundColorHex = other.BackgroundColorHex;
+            if (other.HasBottomBorder.HasValue) HasBottomBorder = other.HasBottomBorder;
+        }
+    }
+
+    private sealed class PartialRunStyle
+    {
+        public bool? Bold;
+        public bool? Italic;
+        public bool? Underline;
+        public bool? Strike;
+        public RichVerticalAlign? VerticalAlign;
+        public string? FontFamily;
+        public float? FontSizePt;
+        public string? TextColorHex;
+        public string? HighlightColorHex;
+
+        public void MergeFrom(PartialRunStyle other)
+        {
+            if (other.Bold.HasValue) Bold = other.Bold;
+            if (other.Italic.HasValue) Italic = other.Italic;
+            if (other.Underline.HasValue) Underline = other.Underline;
+            if (other.Strike.HasValue) Strike = other.Strike;
+            if (other.VerticalAlign.HasValue) VerticalAlign = other.VerticalAlign;
+            if (!string.IsNullOrWhiteSpace(other.FontFamily)) FontFamily = other.FontFamily;
+            if (other.FontSizePt.HasValue) FontSizePt = other.FontSizePt;
+            if (other.TextColorHex != null) TextColorHex = other.TextColorHex;
+            if (other.HighlightColorHex != null) HighlightColorHex = other.HighlightColorHex;
+        }
+    }
+
+    private sealed class RawStyleDef
+    {
+        public string StyleId = "";
+        public string Name = "";
+        public string Type = "paragraph";
+        public string? BasedOn;
+        public bool IsDefault;
+        public PartialParagraphStyle Paragraph = new();
+        public PartialRunStyle Run = new();
+    }
+
+    private sealed class DocxStyleCatalog
+    {
+        public PartialParagraphStyle DefaultParagraph = new();
+        public PartialRunStyle DefaultRun = new();
+        public string? DefaultParagraphStyleId;
+        public Dictionary<string, RawStyleDef> Styles = new(StringComparer.OrdinalIgnoreCase);
+
+        public (PartialParagraphStyle Para, PartialRunStyle Run) ResolveParagraphStyle(string? styleId)
+        {
+            var para = new PartialParagraphStyle();
+            var run = new PartialRunStyle();
+            para.MergeFrom(DefaultParagraph);
+            run.MergeFrom(DefaultRun);
+
+            string? targetId = !string.IsNullOrWhiteSpace(styleId) ? styleId : DefaultParagraphStyleId;
+            var chain = new List<RawStyleDef>();
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            string? cur = targetId;
+            int guard = 0;
+            while (!string.IsNullOrWhiteSpace(cur) && guard++ < 16 && visited.Add(cur) && Styles.TryGetValue(cur, out var def))
+            {
+                chain.Add(def);
+                cur = def.BasedOn;
+            }
+            chain.Reverse();
+
+            int inferredHeading = 0;
+            foreach (var def in chain)
+            {
+                para.MergeFrom(def.Paragraph);
+                run.MergeFrom(def.Run);
+                int h = DetectHeadingLevel(def.StyleId, def.Name);
+                if (h != 0) inferredHeading = h;
+            }
+
+            if (inferredHeading == 0 && !string.IsNullOrWhiteSpace(styleId))
+                inferredHeading = DetectHeadingLevel(styleId, styleId);
+            if (!para.HeadingLevel.HasValue && inferredHeading != 0)
+                para.HeadingLevel = inferredHeading;
+
+            // Applica i default visivi per Heading/Title solo se styles.xml non ha esplicitato dimensione/grassetto.
+            if (para.HeadingLevel is int hl and not 0)
+                ApplyHeadingDefaultsIfMissing(hl, para, run);
+
+            return (para, run);
+        }
+
+        public PartialRunStyle ResolveCharacterStyle(string? styleId)
+        {
+            var run = new PartialRunStyle();
+            if (string.IsNullOrWhiteSpace(styleId)) return run;
+            var chain = new List<RawStyleDef>();
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            string? cur = styleId;
+            int guard = 0;
+            while (!string.IsNullOrWhiteSpace(cur) && guard++ < 16 && visited.Add(cur) && Styles.TryGetValue(cur, out var def))
+            {
+                chain.Add(def);
+                cur = def.BasedOn;
+            }
+            chain.Reverse();
+            foreach (var def in chain)
+                run.MergeFrom(def.Run);
+            return run;
+        }
+    }
+
+    private sealed class NumberingLevelDef
+    {
+        public string NumFmt = "bullet";
+        public string LvlText = "•";
+        public int Start = 1;
+        public float? IndentLeftPt;
+        public float? FirstLineIndentPt;
+    }
+
+    private sealed class NumberingCatalog
+    {
+        public Dictionary<string, Dictionary<int, NumberingLevelDef>> AbstractNums = new(StringComparer.Ordinal);
+        public Dictionary<string, (string AbstractNumId, Dictionary<int, int> StartOverrides)> Nums = new(StringComparer.Ordinal);
+
+        public NumberingLevelDef? FindLevel(string numId, int level, out int startOverride)
+        {
+            startOverride = -1;
+            if (!Nums.TryGetValue(numId, out var num)) return null;
+            if (num.StartOverrides.TryGetValue(level, out int ov)) startOverride = ov;
+            if (!AbstractNums.TryGetValue(num.AbstractNumId, out var levels)) return null;
+            return levels.TryGetValue(level, out var def) ? def : null;
+        }
+    }
+
+    private static DocxStyleCatalog ReadStyles(ZipArchive zip, XNamespace ns, string majorFont, string minorFont)
+    {
+        var catalog = new DocxStyleCatalog();
+        catalog.DefaultRun.FontFamily = minorFont;
+        catalog.DefaultRun.FontSizePt = 11f;
+        catalog.DefaultParagraph.SpaceAfterPt = 6f;
+        catalog.DefaultParagraph.LineSpacingMultiplier = 1.15f;
+
+        try
+        {
+            var entry = zip.GetEntry("word/styles.xml");
+            if (entry == null) return catalog;
+            using var stream = entry.Open();
+            var doc = XDocument.Load(stream);
+            var root = doc.Root;
+            if (root == null) return catalog;
+            XNamespace sns = root.Name.Namespace;
+
+            var docDefaults = root.Element(sns + "docDefaults");
+            if (docDefaults != null)
+            {
+                var rPrDefault = docDefaults.Element(sns + "rPrDefault")?.Element(sns + "rPr");
+                if (rPrDefault != null)
+                    catalog.DefaultRun.MergeFrom(ParseRunProperties(rPrDefault, sns, majorFont, minorFont));
+                var pPrDefault = docDefaults.Element(sns + "pPrDefault")?.Element(sns + "pPr");
+                if (pPrDefault != null)
+                    catalog.DefaultParagraph.MergeFrom(ParseParagraphProperties(pPrDefault, sns));
+            }
+
+            foreach (var styleEl in root.Elements(sns + "style"))
+            {
+                string? styleId = (string?)styleEl.Attribute(sns + "styleId");
+                if (string.IsNullOrWhiteSpace(styleId)) continue;
+                string type = (string?)styleEl.Attribute(sns + "type") ?? "paragraph";
+                bool isDefault = IsOpenXmlTruthy((string?)styleEl.Attribute(sns + "default"));
+                string name = (string?)styleEl.Element(sns + "name")?.Attribute(sns + "val") ?? styleId;
+                string? basedOn = (string?)styleEl.Element(sns + "basedOn")?.Attribute(sns + "val");
+
+                var def = new RawStyleDef
+                {
+                    StyleId = styleId,
+                    Name = name,
+                    Type = type,
+                    BasedOn = basedOn,
+                    IsDefault = isDefault
+                };
+                if (styleEl.Element(sns + "pPr") is { } pPr)
+                    def.Paragraph = ParseParagraphProperties(pPr, sns);
+                if (styleEl.Element(sns + "rPr") is { } rPr)
+                    def.Run = ParseRunProperties(rPr, sns, majorFont, minorFont);
+
+                catalog.Styles[styleId] = def;
+                if (isDefault && type.Equals("paragraph", StringComparison.OrdinalIgnoreCase))
+                    catalog.DefaultParagraphStyleId = styleId;
+            }
+        }
+        catch { /* fallback gracefully to default styles */ }
+
+        return catalog;
+    }
+
+    private static NumberingCatalog ReadNumbering(ZipArchive zip, XNamespace ns)
+    {
+        var catalog = new NumberingCatalog();
+        try
+        {
+            var entry = zip.GetEntry("word/numbering.xml");
+            if (entry == null) return catalog;
+            using var stream = entry.Open();
+            var doc = XDocument.Load(stream);
+            var root = doc.Root;
+            if (root == null) return catalog;
+            XNamespace nns = root.Name.Namespace;
+
+            foreach (var abs in root.Elements(nns + "abstractNum"))
+            {
+                string? absId = (string?)abs.Attribute(nns + "abstractNumId");
+                if (string.IsNullOrWhiteSpace(absId)) continue;
+                var map = new Dictionary<int, NumberingLevelDef>();
+                foreach (var lvl in abs.Elements(nns + "lvl"))
+                {
+                    if (!int.TryParse((string?)lvl.Attribute(nns + "ilvl"), NumberStyles.Integer, CultureInfo.InvariantCulture, out int ilvl))
+                        continue;
+                    string numFmt = (string?)lvl.Element(nns + "numFmt")?.Attribute(nns + "val") ?? "bullet";
+                    string lvlText = (string?)lvl.Element(nns + "lvlText")?.Attribute(nns + "val") ?? "•";
+                    int start = 1;
+                    if (int.TryParse((string?)lvl.Element(nns + "start")?.Attribute(nns + "val"), NumberStyles.Integer, CultureInfo.InvariantCulture, out int s))
+                        start = s;
+
+                    var def = new NumberingLevelDef { NumFmt = numFmt, LvlText = lvlText, Start = start };
+                    var ind = lvl.Element(nns + "pPr")?.Element(nns + "ind");
+                    if (ind != null)
+                    {
+                        def.IndentLeftPt = TryParseTwipsToPt((string?)ind.Attribute(nns + "left") ?? (string?)ind.Attribute(nns + "start"));
+                        float? hanging = TryParseTwipsToPt((string?)ind.Attribute(nns + "hanging"));
+                        if (hanging.HasValue) def.FirstLineIndentPt = -hanging.Value;
+                    }
+                    map[ilvl] = def;
+                }
+                catalog.AbstractNums[absId] = map;
+            }
+
+            foreach (var num in root.Elements(nns + "num"))
+            {
+                string? numId = (string?)num.Attribute(nns + "numId");
+                string? absId = (string?)num.Element(nns + "abstractNumId")?.Attribute(nns + "val");
+                if (string.IsNullOrWhiteSpace(numId) || string.IsNullOrWhiteSpace(absId)) continue;
+                var overrides = new Dictionary<int, int>();
+                foreach (var ov in num.Elements(nns + "lvlOverride"))
+                {
+                    if (int.TryParse((string?)ov.Attribute(nns + "ilvl"), NumberStyles.Integer, CultureInfo.InvariantCulture, out int ilvl) &&
+                        int.TryParse((string?)ov.Element(nns + "startOverride")?.Attribute(nns + "val"), NumberStyles.Integer, CultureInfo.InvariantCulture, out int st))
+                    {
+                        overrides[ilvl] = st;
+                    }
+                }
+                catalog.Nums[numId] = (absId, overrides);
+            }
+        }
+        catch { /* fallback gracefully to simple bullets */ }
+
+        return catalog;
+    }
+
+    private static void ParseContainerBlocks(
+        XElement container,
+        XNamespace ns,
+        List<RichBlock> targetBlocks,
+        DocxStyleCatalog styles,
+        NumberingCatalog numbering,
+        Dictionary<(string NumId, int Level), int> listCounters,
+        string majorFont,
+        string minorFont)
+    {
+        foreach (var child in container.Elements())
+        {
+            if (child.Name == ns + "p")
+            {
+                targetBlocks.Add(ParseRichParagraph(child, ns, styles, numbering, listCounters, majorFont, minorFont));
+            }
+            else if (child.Name == ns + "tbl")
+            {
+                var table = ParseRichTable(child, ns, styles, numbering, listCounters, majorFont, minorFont);
+                if (table.Rows.Count > 0)
+                    targetBlocks.Add(table);
+            }
+            else if (child.Name == ns + "sdt")
+            {
+                var sdtContent = child.Element(ns + "sdtContent");
+                if (sdtContent != null)
+                    ParseContainerBlocks(sdtContent, ns, targetBlocks, styles, numbering, listCounters, majorFont, minorFont);
+            }
+        }
+    }
+
+    private static RichTable ParseRichTable(
+        XElement tableEl,
+        XNamespace ns,
+        DocxStyleCatalog styles,
+        NumberingCatalog numbering,
+        Dictionary<(string NumId, int Level), int> listCounters,
+        string majorFont,
+        string minorFont)
+    {
+        var table = new RichTable();
+        var grid = tableEl.Element(ns + "tblGrid");
+        if (grid != null)
+        {
+            foreach (var col in grid.Elements(ns + "gridCol"))
+            {
+                if (float.TryParse((string?)col.Attribute(ns + "w"), NumberStyles.Float, CultureInfo.InvariantCulture, out float w) && w > 0)
+                    table.ColumnWidthTwips.Add(w);
+            }
+        }
+
+        long totalCells = 0;
+        foreach (var tr in tableEl.Elements(ns + "tr"))
+        {
+            var row = new RichTableRow();
+            var trPr = tr.Element(ns + "trPr");
+            if (trPr != null && trPr.Element(ns + "tblHeader") is { } hdr && ReadOpenXmlToggle(hdr) != false)
+                row.IsHeader = true;
+
+            foreach (var tc in tr.Elements(ns + "tc"))
+            {
+                totalCells++;
+                if (totalCells > 200_000)
+                    throw new IOException("La tabella contiene troppe celle.");
+
+                var cell = new RichTableCell();
+                var tcPr = tc.Element(ns + "tcPr");
+                if (tcPr != null)
+                {
+                    if (int.TryParse((string?)tcPr.Element(ns + "gridSpan")?.Attribute(ns + "val"), NumberStyles.Integer, CultureInfo.InvariantCulture, out int span) && span > 1)
+                        cell.GridSpan = Math.Min(span, 64);
+
+                    var tcW = tcPr.Element(ns + "tcW");
+                    string? tcWType = (string?)tcW?.Attribute(ns + "type");
+                    if (tcW != null && (string.IsNullOrEmpty(tcWType) || tcWType.Equals("dxa", StringComparison.OrdinalIgnoreCase)) &&
+                        float.TryParse((string?)tcW.Attribute(ns + "w"), NumberStyles.Float, CultureInfo.InvariantCulture, out float wTwips) && wTwips > 0)
+                    {
+                        cell.WidthTwips = wTwips;
+                    }
+
+                    string? fill = NormalizeHexColor((string?)tcPr.Element(ns + "shd")?.Attribute(ns + "fill"));
+                    if (fill != null && !fill.Equals("FFFFFF", StringComparison.OrdinalIgnoreCase))
+                        cell.ShadingColorHex = fill;
+                }
+
+                foreach (var pEl in tc.Elements(ns + "p"))
+                {
+                    var p = ParseRichParagraph(pEl, ns, styles, numbering, listCounters, majorFont, minorFont);
+                    // Nelle celle tabella usa spaziatura compatta se non specificata.
+                    if (p.SpaceAfterPt > 3f && pEl.Element(ns + "pPr")?.Element(ns + "spacing")?.Attribute(ns + "after") == null)
+                        p.SpaceAfterPt = 2f;
+                    cell.Paragraphs.Add(p);
+                }
+
+                if (cell.Paragraphs.Count == 0)
+                    cell.Paragraphs.Add(new RichParagraph { SpaceAfterPt = 2f });
+
+                row.Cells.Add(cell);
+            }
+
+            if (row.Cells.Count > 0)
+                table.Rows.Add(row);
+        }
+
+        return table;
+    }
+
+    private static RichParagraph ParseRichParagraph(
+        XElement pEl,
+        XNamespace ns,
+        DocxStyleCatalog styles,
+        NumberingCatalog numbering,
+        Dictionary<(string NumId, int Level), int> listCounters,
+        string majorFont,
+        string minorFont)
+    {
+        var pPr = pEl.Element(ns + "pPr");
+        string? pStyleId = (string?)pPr?.Element(ns + "pStyle")?.Attribute(ns + "val");
+        var (resolvedPara, resolvedRun) = styles.ResolveParagraphStyle(pStyleId);
+
+        if (pPr != null)
+        {
+            resolvedPara.MergeFrom(ParseParagraphProperties(pPr, ns));
+            if (pPr.Element(ns + "rPr") is { } pRunPr)
+                resolvedRun.MergeFrom(ParseRunProperties(pRunPr, ns, majorFont, minorFont));
+        }
+
+        var para = new RichParagraph
+        {
+            HeadingLevel = resolvedPara.HeadingLevel ?? 0,
+            Alignment = resolvedPara.Alignment ?? RichAlignment.Left,
+            SpaceBeforePt = resolvedPara.SpaceBeforePt ?? 0f,
+            SpaceAfterPt = resolvedPara.SpaceAfterPt ?? 6f,
+            LineSpacingMultiplier = resolvedPara.LineSpacingMultiplier ?? 1.15f,
+            IndentLeftPt = resolvedPara.IndentLeftPt ?? 0f,
+            IndentRightPt = resolvedPara.IndentRightPt ?? 0f,
+            FirstLineIndentPt = resolvedPara.FirstLineIndentPt ?? 0f,
+            PageBreakBefore = resolvedPara.PageBreakBefore ?? false,
+            BackgroundColorHex = resolvedPara.BackgroundColorHex,
+            HasBottomBorder = resolvedPara.HasBottomBorder ?? false
+        };
+
+        // Gestione elenchi puntati / numerati
+        if (!string.IsNullOrWhiteSpace(resolvedPara.NumId) && resolvedPara.NumId != "0")
+        {
+            int ilvl = Math.Clamp(resolvedPara.ListLevel ?? 0, 0, 8);
+            para.IsListItem = true;
+            para.ListLevel = ilvl;
+
+            var lvlDef = numbering.FindLevel(resolvedPara.NumId, ilvl, out int startOverride);
+            if (lvlDef != null)
+            {
+                if (para.IndentLeftPt <= 0f && lvlDef.IndentLeftPt is > 0f)
+                    para.IndentLeftPt = lvlDef.IndentLeftPt.Value;
+                if (para.FirstLineIndentPt == 0f && lvlDef.FirstLineIndentPt.HasValue)
+                    para.FirstLineIndentPt = lvlDef.FirstLineIndentPt.Value;
+
+                bool isBullet = lvlDef.NumFmt.Equals("bullet", StringComparison.OrdinalIgnoreCase) ||
+                                lvlDef.NumFmt.Equals("none", StringComparison.OrdinalIgnoreCase);
+                para.IsOrderedList = !isBullet;
+                if (isBullet)
+                {
+                    para.ListMarker = lvlDef.NumFmt.Equals("none", StringComparison.OrdinalIgnoreCase)
+                        ? ""
+                        : NormalizeBulletSymbol(lvlDef.LvlText, ilvl);
+                }
+                else
+                {
+                    var key = (resolvedPara.NumId, ilvl);
+                    int nextVal = listCounters.TryGetValue(key, out int prev)
+                        ? prev + 1
+                        : (startOverride >= 0 ? startOverride : lvlDef.Start);
+                    listCounters[key] = nextVal;
+                    // Azzera i sottolivelli più profondi della stessa lista.
+                    foreach (var deeper in listCounters.Keys.Where(k => k.NumId == resolvedPara.NumId && k.Level > ilvl).ToArray())
+                        listCounters.Remove(deeper);
+
+                    string formatted = FormatListCounter(nextVal, lvlDef.NumFmt);
+                    string pattern = string.IsNullOrEmpty(lvlDef.LvlText) ? $"%{ilvl + 1}." : lvlDef.LvlText;
+                    string marker = pattern;
+                    for (int l = 0; l <= 8; l++)
+                    {
+                        string token = $"%{l + 1}";
+                        if (!marker.Contains(token, StringComparison.Ordinal)) continue;
+                        string valStr = l == ilvl
+                            ? formatted
+                            : FormatListCounter(listCounters.GetValueOrDefault((resolvedPara.NumId, l), 1), "decimal");
+                        marker = marker.Replace(token, valStr, StringComparison.Ordinal);
+                    }
+                    para.ListMarker = marker.Trim();
+                }
+            }
+            else
+            {
+                para.IsOrderedList = false;
+                para.ListMarker = ilvl % 3 == 0 ? "•" : ilvl % 3 == 1 ? "◦" : "▪";
+            }
+
+            if (para.IndentLeftPt <= 0f)
+                para.IndentLeftPt = 24f * (ilvl + 1);
+        }
+
+        // Leggi i run del paragrafo gestendo hyperlink, w:ins, w:sdt e saltando w:del / w:instrText
+        bool inFieldInstruction = false;
+        ParseParagraphInlines(pEl, ns, para.Runs, resolvedRun, styles, majorFont, minorFont, isHyperlink: false, ref inFieldInstruction);
+
+        return para;
+    }
+
+    private static void ParseParagraphInlines(
+        XElement container,
+        XNamespace ns,
+        List<RichRun> runs,
+        PartialRunStyle paragraphRunDefaults,
+        DocxStyleCatalog styles,
+        string majorFont,
+        string minorFont,
+        bool isHyperlink,
+        ref bool inFieldInstruction)
+    {
+        foreach (var child in container.Elements())
+        {
+            if (child.Name == ns + "pPr" || child.Name == ns + "del" || child.Name == ns + "moveFrom" ||
+                child.Name == ns + "bookmarkStart" || child.Name == ns + "bookmarkEnd" || child.Name == ns + "proofErr")
+                continue;
+
+            if (child.Name == ns + "r")
+            {
+                ParseRunElement(child, ns, runs, paragraphRunDefaults, styles, majorFont, minorFont, isHyperlink, ref inFieldInstruction);
+            }
+            else if (child.Name == ns + "hyperlink")
+            {
+                ParseParagraphInlines(child, ns, runs, paragraphRunDefaults, styles, majorFont, minorFont, isHyperlink: true, ref inFieldInstruction);
+            }
+            else if (child.Name == ns + "ins" || child.Name == ns + "smartTag" || child.Name == ns + "fldSimple")
+            {
+                ParseParagraphInlines(child, ns, runs, paragraphRunDefaults, styles, majorFont, minorFont, isHyperlink, ref inFieldInstruction);
+            }
+            else if (child.Name == ns + "sdt")
+            {
+                var content = child.Element(ns + "sdtContent");
+                if (content != null)
+                    ParseParagraphInlines(content, ns, runs, paragraphRunDefaults, styles, majorFont, minorFont, isHyperlink, ref inFieldInstruction);
+            }
+        }
+    }
+
+    private static void ParseRunElement(
+        XElement rEl,
+        XNamespace ns,
+        List<RichRun> runs,
+        PartialRunStyle paragraphRunDefaults,
+        DocxStyleCatalog styles,
+        string majorFont,
+        string minorFont,
+        bool isHyperlink,
+        ref bool inFieldInstruction)
+    {
+        var merged = new PartialRunStyle();
+        merged.MergeFrom(paragraphRunDefaults);
+        if (isHyperlink)
+        {
+            merged.TextColorHex ??= "0563C1";
+            merged.Underline ??= true;
+        }
+
+        var rPr = rEl.Element(ns + "rPr");
+        if (rPr != null)
+        {
+            string? rStyleId = (string?)rPr.Element(ns + "rStyle")?.Attribute(ns + "val");
+            if (!string.IsNullOrWhiteSpace(rStyleId))
+                merged.MergeFrom(styles.ResolveCharacterStyle(rStyleId));
+            merged.MergeFrom(ParseRunProperties(rPr, ns, majorFont, minorFont));
+        }
+
+        RichRun CreateStyledRun(string text) => new()
+        {
+            Text = text,
+            Bold = merged.Bold ?? false,
+            Italic = merged.Italic ?? false,
+            Underline = merged.Underline ?? false,
+            Strike = merged.Strike ?? false,
+            VerticalAlign = merged.VerticalAlign ?? RichVerticalAlign.Baseline,
+            FontFamily = string.IsNullOrWhiteSpace(merged.FontFamily) ? minorFont : merged.FontFamily!,
+            FontSizePt = Math.Clamp(merged.FontSizePt ?? 11f, 5f, 96f),
+            TextColorHex = merged.TextColorHex,
+            HighlightColorHex = merged.HighlightColorHex
+        };
+
+        foreach (var node in rEl.Elements())
+        {
+            if (node.Name == ns + "rPr" || node.Name == ns + "instrText" || node.Name == ns + "delText")
+                continue;
+
+            if (node.Name == ns + "fldChar")
+            {
+                string? fType = (string?)node.Attribute(ns + "fldCharType");
+                if (string.Equals(fType, "begin", StringComparison.OrdinalIgnoreCase)) inFieldInstruction = true;
+                else if (string.Equals(fType, "separate", StringComparison.OrdinalIgnoreCase)) inFieldInstruction = false;
+                else if (string.Equals(fType, "end", StringComparison.OrdinalIgnoreCase)) inFieldInstruction = false;
+                continue;
+            }
+
+            if (inFieldInstruction) continue;
+
+            if (node.Name == ns + "t")
+            {
+                string value = node.Value;
+                if (value.Length > 0)
+                    runs.Add(CreateStyledRun(value));
+            }
+            else if (node.Name == ns + "tab")
+            {
+                var tabRun = CreateStyledRun("\t");
+                tabRun.IsTab = true;
+                runs.Add(tabRun);
+            }
+            else if (node.Name == ns + "br")
+            {
+                string? brType = (string?)node.Attribute(ns + "type");
+                var brRun = CreateStyledRun("");
+                if (string.Equals(brType, "page", StringComparison.OrdinalIgnoreCase))
+                    brRun.IsPageBreak = true;
+                else
+                    brRun.IsLineBreak = true;
+                runs.Add(brRun);
+            }
+            else if (node.Name == ns + "cr")
+            {
+                var crRun = CreateStyledRun("");
+                crRun.IsLineBreak = true;
+                runs.Add(crRun);
+            }
+            else if (node.Name == ns + "noBreakHyphen")
+            {
+                runs.Add(CreateStyledRun("-"));
+            }
+        }
+    }
+
+    private static PartialParagraphStyle ParseParagraphProperties(XElement pPr, XNamespace ns)
+    {
+        var style = new PartialParagraphStyle();
+
+        var outlineLvl = pPr.Element(ns + "outlineLvl");
+        if (outlineLvl != null && int.TryParse((string?)outlineLvl.Attribute(ns + "val"), NumberStyles.Integer, CultureInfo.InvariantCulture, out int lvl) && lvl is >= 0 and <= 5)
+            style.HeadingLevel = lvl + 1;
+
+        string? jc = (string?)pPr.Element(ns + "jc")?.Attribute(ns + "val");
+        if (!string.IsNullOrWhiteSpace(jc))
+        {
+            style.Alignment = jc.ToLowerInvariant() switch
+            {
+                "center" => RichAlignment.Center,
+                "right" or "end" => RichAlignment.Right,
+                "both" or "distribute" => RichAlignment.Justify,
+                _ => RichAlignment.Left
+            };
+        }
+
+        var spacing = pPr.Element(ns + "spacing");
+        if (spacing != null)
+        {
+            float? before = TryParseTwipsToPt((string?)spacing.Attribute(ns + "before"));
+            float? after = TryParseTwipsToPt((string?)spacing.Attribute(ns + "after"));
+            if (before is >= 0f and <= 200f) style.SpaceBeforePt = before.Value;
+            if (after is >= 0f and <= 200f) style.SpaceAfterPt = after.Value;
+
+            if (float.TryParse((string?)spacing.Attribute(ns + "line"), NumberStyles.Float, CultureInfo.InvariantCulture, out float lineVal) && lineVal > 0)
+            {
+                string? lineRule = (string?)spacing.Attribute(ns + "lineRule");
+                if (string.IsNullOrEmpty(lineRule) || lineRule.Equals("auto", StringComparison.OrdinalIgnoreCase))
+                    style.LineSpacingMultiplier = Math.Clamp(lineVal / 240f, 0.9f, 3.0f);
+                else
+                    style.LineSpacingMultiplier = Math.Clamp((lineVal / 20f) / 13f, 0.9f, 3.0f);
+            }
+        }
+
+        var ind = pPr.Element(ns + "ind");
+        if (ind != null)
+        {
+            float? left = TryParseTwipsToPt((string?)ind.Attribute(ns + "left") ?? (string?)ind.Attribute(ns + "start"));
+            float? right = TryParseTwipsToPt((string?)ind.Attribute(ns + "right") ?? (string?)ind.Attribute(ns + "end"));
+            float? firstLine = TryParseTwipsToPt((string?)ind.Attribute(ns + "firstLine"));
+            float? hanging = TryParseTwipsToPt((string?)ind.Attribute(ns + "hanging"));
+            if (left is >= 0f and <= 360f) style.IndentLeftPt = left.Value;
+            if (right is >= 0f and <= 360f) style.IndentRightPt = right.Value;
+            if (firstLine is > 0f and <= 240f) style.FirstLineIndentPt = firstLine.Value;
+            else if (hanging is > 0f and <= 240f) style.FirstLineIndentPt = -hanging.Value;
+        }
+
+        var pageBreak = pPr.Element(ns + "pageBreakBefore");
+        if (pageBreak != null)
+            style.PageBreakBefore = ReadOpenXmlToggle(pageBreak) ?? true;
+
+        var numPr = pPr.Element(ns + "numPr");
+        if (numPr != null)
+        {
+            string? numId = (string?)numPr.Element(ns + "numId")?.Attribute(ns + "val");
+            if (!string.IsNullOrWhiteSpace(numId)) style.NumId = numId;
+            if (int.TryParse((string?)numPr.Element(ns + "ilvl")?.Attribute(ns + "val"), NumberStyles.Integer, CultureInfo.InvariantCulture, out int ilvl))
+                style.ListLevel = ilvl;
+        }
+
+        string? shdFill = NormalizeHexColor((string?)pPr.Element(ns + "shd")?.Attribute(ns + "fill"));
+        if (shdFill != null && !shdFill.Equals("FFFFFF", StringComparison.OrdinalIgnoreCase))
+            style.BackgroundColorHex = shdFill;
+
+        var bottomBorder = pPr.Element(ns + "pBdr")?.Element(ns + "bottom");
+        if (bottomBorder != null)
+        {
+            string? bVal = (string?)bottomBorder.Attribute(ns + "val");
+            if (!string.IsNullOrWhiteSpace(bVal) &&
+                !bVal.Equals("none", StringComparison.OrdinalIgnoreCase) &&
+                !bVal.Equals("nil", StringComparison.OrdinalIgnoreCase))
+                style.HasBottomBorder = true;
+        }
+
+        return style;
+    }
+
+    private static PartialRunStyle ParseRunProperties(XElement rPr, XNamespace ns, string majorFont, string minorFont)
+    {
+        var style = new PartialRunStyle();
+
+        if (rPr.Element(ns + "b") is { } bEl) style.Bold = ReadOpenXmlToggle(bEl) ?? true;
+        if (rPr.Element(ns + "i") is { } iEl) style.Italic = ReadOpenXmlToggle(iEl) ?? true;
+        if (rPr.Element(ns + "strike") is { } stEl) style.Strike = ReadOpenXmlToggle(stEl) ?? true;
+        else if (rPr.Element(ns + "dstrike") is { } dstEl) style.Strike = ReadOpenXmlToggle(dstEl) ?? true;
+
+        if (rPr.Element(ns + "u") is { } uEl)
+        {
+            string? uVal = (string?)uEl.Attribute(ns + "val");
+            style.Underline = string.IsNullOrWhiteSpace(uVal) ||
+                (!uVal.Equals("none", StringComparison.OrdinalIgnoreCase) &&
+                 !uVal.Equals("false", StringComparison.OrdinalIgnoreCase) &&
+                 uVal != "0");
+        }
+
+        string? vert = (string?)rPr.Element(ns + "vertAlign")?.Attribute(ns + "val");
+        if (!string.IsNullOrWhiteSpace(vert))
+        {
+            style.VerticalAlign = vert.ToLowerInvariant() switch
+            {
+                "superscript" => RichVerticalAlign.Superscript,
+                "subscript" => RichVerticalAlign.Subscript,
+                _ => RichVerticalAlign.Baseline
+            };
+        }
+
+        var rFonts = rPr.Element(ns + "rFonts");
+        if (rFonts != null)
+        {
+            string? font = (string?)rFonts.Attribute(ns + "ascii")
+                ?? (string?)rFonts.Attribute(ns + "hAnsi")
+                ?? (string?)rFonts.Attribute(ns + "cs");
+            if (string.IsNullOrWhiteSpace(font))
+            {
+                string? theme = (string?)rFonts.Attribute(ns + "asciiTheme") ?? (string?)rFonts.Attribute(ns + "hAnsiTheme");
+                if (!string.IsNullOrWhiteSpace(theme))
+                    font = theme.StartsWith("major", StringComparison.OrdinalIgnoreCase) ? majorFont : minorFont;
+            }
+            if (!string.IsNullOrWhiteSpace(font))
+                style.FontFamily = font.Trim();
+        }
+
+        if (float.TryParse((string?)rPr.Element(ns + "sz")?.Attribute(ns + "val"), NumberStyles.Float, CultureInfo.InvariantCulture, out float halfPts) && halfPts > 0)
+            style.FontSizePt = Math.Clamp(halfPts / 2f, 5f, 96f);
+
+        string? color = NormalizeHexColor((string?)rPr.Element(ns + "color")?.Attribute(ns + "val"));
+        if (color != null)
+            style.TextColorHex = color;
+
+        string? highlight = (string?)rPr.Element(ns + "highlight")?.Attribute(ns + "val");
+        if (!string.IsNullOrWhiteSpace(highlight) && !highlight.Equals("none", StringComparison.OrdinalIgnoreCase))
+        {
+            string? hlHex = MapWordHighlightColor(highlight);
+            if (hlHex != null) style.HighlightColorHex = hlHex;
+        }
+        else
+        {
+            string? shdFill = NormalizeHexColor((string?)rPr.Element(ns + "shd")?.Attribute(ns + "fill"));
+            if (shdFill != null && !shdFill.Equals("FFFFFF", StringComparison.OrdinalIgnoreCase))
+                style.HighlightColorHex = shdFill;
+        }
+
+        return style;
+    }
+
+    private static int DetectHeadingLevel(string? styleId, string? styleName)
+    {
+        foreach (string candidate in new[] { styleId ?? "", styleName ?? "" })
+        {
+            string s = candidate.Trim();
+            if (s.Length == 0) continue;
+            if (s.Equals("Title", StringComparison.OrdinalIgnoreCase) || s.Equals("Titolo", StringComparison.OrdinalIgnoreCase))
+                return -1;
+            if (s.Equals("Subtitle", StringComparison.OrdinalIgnoreCase) || s.Equals("Sottotitolo", StringComparison.OrdinalIgnoreCase))
+                return -2;
+            var m = Regex.Match(s, @"^(?:Heading|Titolo)\s*([1-6])$", RegexOptions.IgnoreCase);
+            if (m.Success)
+                return int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+        }
+        return 0;
+    }
+
+    private static void ApplyHeadingDefaultsIfMissing(int headingLevel, PartialParagraphStyle para, PartialRunStyle run)
+    {
+        switch (headingLevel)
+        {
+            case -1: // Title
+                run.FontSizePt ??= 24f;
+                run.Bold ??= true;
+                para.SpaceBeforePt ??= 4f;
+                para.SpaceAfterPt ??= 10f;
+                break;
+            case -2: // Subtitle
+                run.FontSizePt ??= 14f;
+                run.Italic ??= true;
+                run.TextColorHex ??= "595959";
+                para.SpaceBeforePt ??= 2f;
+                para.SpaceAfterPt ??= 8f;
+                break;
+            case 1:
+                run.FontSizePt ??= 20f;
+                run.Bold ??= true;
+                run.TextColorHex ??= "1F4E79";
+                para.SpaceBeforePt ??= 14f;
+                para.SpaceAfterPt ??= 6f;
+                break;
+            case 2:
+                run.FontSizePt ??= 16f;
+                run.Bold ??= true;
+                run.TextColorHex ??= "2E74B5";
+                para.SpaceBeforePt ??= 12f;
+                para.SpaceAfterPt ??= 4f;
+                break;
+            case 3:
+                run.FontSizePt ??= 13.5f;
+                run.Bold ??= true;
+                run.TextColorHex ??= "1F4E79";
+                para.SpaceBeforePt ??= 10f;
+                para.SpaceAfterPt ??= 4f;
+                break;
+            case 4:
+                run.FontSizePt ??= 12f;
+                run.Bold ??= true;
+                run.Italic ??= true;
+                run.TextColorHex ??= "2E74B5";
+                para.SpaceBeforePt ??= 8f;
+                para.SpaceAfterPt ??= 3f;
+                break;
+            case 5:
+                run.FontSizePt ??= 11.5f;
+                run.Bold ??= true;
+                run.TextColorHex ??= "2E74B5";
+                para.SpaceBeforePt ??= 6f;
+                para.SpaceAfterPt ??= 2f;
+                break;
+            case 6:
+                run.FontSizePt ??= 11f;
+                run.Bold ??= true;
+                run.TextColorHex ??= "595959";
+                para.SpaceBeforePt ??= 6f;
+                para.SpaceAfterPt ??= 2f;
+                break;
+        }
+    }
+
+    private static bool? ReadOpenXmlToggle(XElement el)
+    {
+        var attr = el.Attributes().FirstOrDefault(a => a.Name.LocalName == "val");
+        if (attr == null) return true;
+        string v = attr.Value.Trim();
+        if (v.Equals("0", StringComparison.Ordinal) || v.Equals("false", StringComparison.OrdinalIgnoreCase) || v.Equals("off", StringComparison.OrdinalIgnoreCase))
+            return false;
+        return true;
+    }
+
+    private static bool IsOpenXmlTruthy(string? val) =>
+        !string.IsNullOrWhiteSpace(val) &&
+        (val.Equals("1", StringComparison.Ordinal) || val.Equals("true", StringComparison.OrdinalIgnoreCase));
+
+    private static float? TryParseTwipsToPt(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        return float.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out float twips)
+            ? twips / 20f
+            : null;
+    }
+
+    private static string? NormalizeHexColor(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        string s = raw.Trim().TrimStart('#');
+        if (s.Equals("auto", StringComparison.OrdinalIgnoreCase) || s.Length != 6) return null;
+        for (int i = 0; i < 6; i++)
+        {
+            char c = s[i];
+            if (!((c is >= '0' and <= '9') || (c is >= 'a' and <= 'f') || (c is >= 'A' and <= 'F')))
+                return null;
+        }
+        return s.ToUpperInvariant();
+    }
+
+    private static string? MapWordHighlightColor(string name) => name.Trim().ToLowerInvariant() switch
+    {
+        "yellow" => "FFFF00",
+        "green" => "00FF00",
+        "cyan" => "00FFFF",
+        "magenta" => "FF00FF",
+        "blue" => "0000FF",
+        "red" => "FF0000",
+        "darkblue" => "00008B",
+        "darkcyan" => "008B8B",
+        "darkgreen" => "006400",
+        "darkmagenta" => "8B008B",
+        "darkred" => "8B0000",
+        "darkyellow" => "808000",
+        "darkgray" => "A9A9A9",
+        "lightgray" => "D3D3D3",
+        "black" => "000000",
+        "white" => "FFFFFF",
+        _ => NormalizeHexColor(name)
+    };
+
+    private static string NormalizeBulletSymbol(string lvlText, int level)
+    {
+        string trimmed = lvlText.Trim();
+        if (trimmed.Length == 0 || trimmed.Any(c => c >= '\uE000' && c <= '\uF8FF') ||
+            trimmed is "o" or "§" or "q" or "v" or "n" or "l")
+            return level % 3 == 0 ? "•" : level % 3 == 1 ? "◦" : "▪";
+        return trimmed;
+    }
+
+    private static string FormatListCounter(int value, string numFmt)
+    {
+        int n = Math.Max(1, value);
+        return numFmt.ToLowerInvariant() switch
+        {
+            "lowerletter" => ToLetters(n).ToLowerInvariant(),
+            "upperletter" => ToLetters(n),
+            "lowerroman" => ToRoman(n).ToLowerInvariant(),
+            "upperroman" => ToRoman(n),
+            _ => n.ToString(CultureInfo.InvariantCulture)
+        };
+    }
+
+    private static string ToLetters(int n)
+    {
+        var sb = new StringBuilder();
+        while (n > 0)
+        {
+            n--;
+            sb.Insert(0, (char)('A' + (n % 26)));
+            n /= 26;
+        }
+        return sb.ToString();
+    }
+
+    private static string ToRoman(int n)
+    {
+        if (n > 3999) return n.ToString(CultureInfo.InvariantCulture);
+        (int Val, string Sym)[] map =
+        [
+            (1000, "M"), (900, "CM"), (500, "D"), (400, "CD"),
+            (100, "C"), (90, "XC"), (50, "L"), (40, "XL"),
+            (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I")
+        ];
+        var sb = new StringBuilder();
+        foreach (var (val, sym) in map)
+        {
+            while (n >= val) { sb.Append(sym); n -= val; }
+        }
+        return sb.ToString();
+    }
+
+    private static RichDocument ParseMarkdownToRichDocument(string raw)
+    {
+        var doc = new RichDocument { DefaultFontFamily = "Calibri", DefaultFontSizePt = 11f };
+        foreach (string line in raw.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n'))
+        {
+            string trimmed = line.TrimEnd();
+            if (trimmed.Length == 0)
+            {
+                doc.Blocks.Add(new RichParagraph { SpaceAfterPt = 4f });
+                continue;
+            }
+
+            var para = new RichParagraph();
+            string content = trimmed;
+            var hm = Regex.Match(trimmed, @"^(#{1,6})\s+(.*)$");
+            if (hm.Success)
+            {
+                int lvl = hm.Groups[1].Value.Length;
+                para.HeadingLevel = lvl;
+                var pDef = new PartialParagraphStyle();
+                var rDef = new PartialRunStyle();
+                ApplyHeadingDefaultsIfMissing(lvl, pDef, rDef);
+                para.SpaceBeforePt = pDef.SpaceBeforePt ?? 8f;
+                para.SpaceAfterPt = pDef.SpaceAfterPt ?? 4f;
+                para.Runs.Add(new RichRun
+                {
+                    Text = hm.Groups[2].Value.Trim(),
+                    Bold = rDef.Bold ?? true,
+                    Italic = rDef.Italic ?? false,
+                    FontFamily = doc.DefaultFontFamily,
+                    FontSizePt = rDef.FontSizePt ?? 14f,
+                    TextColorHex = rDef.TextColorHex
+                });
+                doc.Blocks.Add(para);
+                continue;
+            }
+
+            var bm = Regex.Match(trimmed, @"^(\s*)[-*+]\s+(.*)$");
+            var om = Regex.Match(trimmed, @"^(\s*)(\d+[.)])\s+(.*)$");
+            if (bm.Success)
+            {
+                para.IsListItem = true;
+                para.IsOrderedList = false;
+                para.ListLevel = Math.Min(4, bm.Groups[1].Value.Length / 2);
+                para.ListMarker = "•";
+                para.IndentLeftPt = 24f * (para.ListLevel + 1);
+                content = bm.Groups[2].Value;
+            }
+            else if (om.Success)
+            {
+                para.IsListItem = true;
+                para.IsOrderedList = true;
+                para.ListLevel = Math.Min(4, om.Groups[1].Value.Length / 2);
+                para.ListMarker = om.Groups[2].Value;
+                para.IndentLeftPt = 24f * (para.ListLevel + 1);
+                content = om.Groups[3].Value;
+            }
+
+            // Semplice parser inline Markdown (**grassetto**, *corsivo*, `codice`)
+            foreach (Match m in Regex.Matches(content, @"\*\*(.+?)\*\*|\*(.+?)\*|`(.+?)`|([^*`]+)"))
+            {
+                if (m.Groups[1].Success)
+                    para.Runs.Add(new RichRun { Text = m.Groups[1].Value, Bold = true, FontFamily = doc.DefaultFontFamily, FontSizePt = doc.DefaultFontSizePt });
+                else if (m.Groups[2].Success)
+                    para.Runs.Add(new RichRun { Text = m.Groups[2].Value, Italic = true, FontFamily = doc.DefaultFontFamily, FontSizePt = doc.DefaultFontSizePt });
+                else if (m.Groups[3].Success)
+                    para.Runs.Add(new RichRun { Text = m.Groups[3].Value, FontFamily = "Consolas", FontSizePt = 10f, HighlightColorHex = "F3F4F6" });
+                else
+                    para.Runs.Add(new RichRun { Text = m.Groups[4].Value, FontFamily = doc.DefaultFontFamily, FontSizePt = doc.DefaultFontSizePt });
+            }
+            doc.Blocks.Add(para);
+        }
+        return doc;
+    }
+
+    private static RichDocument BuildRichDocumentFromStructuredBlocks(List<(bool IsHeading, string Text)> blocks)
+    {
+        var doc = new RichDocument { DefaultFontFamily = "Calibri", DefaultFontSizePt = 11f };
+        foreach (var (isHeading, text) in blocks)
+        {
+            var para = new RichParagraph
+            {
+                HeadingLevel = isHeading ? 2 : 0,
+                SpaceBeforePt = isHeading ? 10f : 0f,
+                SpaceAfterPt = isHeading ? 4f : 5f
+            };
+            if (!string.IsNullOrEmpty(text))
+            {
+                para.Runs.Add(new RichRun
+                {
+                    Text = text,
+                    Bold = isHeading,
+                    FontFamily = doc.DefaultFontFamily,
+                    FontSizePt = isHeading ? 15f : 11f,
+                    TextColorHex = isHeading ? "1F4E79" : null
+                });
+            }
+            doc.Blocks.Add(para);
+        }
+        return doc;
+    }
+
+    internal static void GenerateRichRtf(RichDocument doc, string rtfPath)
+    {
+        var fonts = new List<string>();
+        var fontMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        int EnsureFont(string? family)
+        {
+            string name = string.IsNullOrWhiteSpace(family) ? doc.DefaultFontFamily : family.Trim();
+            if (string.IsNullOrWhiteSpace(name)) name = "Calibri";
+            if (fontMap.TryGetValue(name, out int idx)) return idx;
+            idx = fonts.Count;
+            fonts.Add(name);
+            fontMap[name] = idx;
+            return idx;
+        }
+
+        // Indice 0 nella \colortbl è sempre auto (vuoto ";"); i colori effettivi partono da 1.
+        var colors = new List<string>();
+        var colorMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        int EnsureColor(string? hex)
+        {
+            string? norm = NormalizeHexColor(hex);
+            if (norm == null) return 0;
+            if (colorMap.TryGetValue(norm, out int idx)) return idx;
+            colors.Add(norm);
+            idx = colors.Count; // 1-based
+            colorMap[norm] = idx;
+            return idx;
+        }
+
+        EnsureFont(doc.DefaultFontFamily);
+        void CollectParagraphResources(RichParagraph p)
+        {
+            EnsureColor(p.BackgroundColorHex);
+            foreach (var r in p.Runs)
+            {
+                EnsureFont(r.FontFamily);
+                EnsureColor(r.TextColorHex);
+                EnsureColor(r.HighlightColorHex);
+            }
+        }
+
+        foreach (var block in doc.Blocks)
+        {
+            if (block is RichParagraph p)
+                CollectParagraphResources(p);
+            else if (block is RichTable t)
+            {
+                foreach (var row in t.Rows)
+                    foreach (var cell in row.Cells)
+                    {
+                        EnsureColor(cell.ShadingColorHex);
+                        foreach (var pCell in cell.Paragraphs)
+                            CollectParagraphResources(pCell);
+                    }
+            }
+        }
+
+        var sb = new StringBuilder(4096);
+        sb.Append(@"{\rtf1\ansi\ansicpg1252\deff0\nouicompat");
+
+        // Font table
+        sb.Append(@"{\fonttbl");
+        for (int i = 0; i < fonts.Count; i++)
+        {
+            sb.Append(@"{\f").Append(i.ToString(CultureInfo.InvariantCulture))
+              .Append(@"\fnil\fcharset0 ");
+            AppendRtfEscapedText(sb, fonts[i]);
+            sb.Append(";}");
+        }
+        sb.AppendLine("}");
+
+        // Color table
+        sb.Append(@"{\colortbl;");
+        foreach (string hex in colors)
+        {
+            int r = Convert.ToInt32(hex[..2], 16);
+            int g = Convert.ToInt32(hex.Substring(2, 2), 16);
+            int b = Convert.ToInt32(hex.Substring(4, 2), 16);
+            sb.Append(string.Create(CultureInfo.InvariantCulture, $@"\red{r}\green{g}\blue{b};"));
+        }
+        sb.AppendLine("}");
+
+        // Page geometry in twips
+        int paperW = Math.Max(3600, (int)Math.Round(doc.PageWidthPt * 20));
+        int paperH = Math.Max(3600, (int)Math.Round(doc.PageHeightPt * 20));
+        int margL = Math.Max(240, (int)Math.Round(doc.MarginLeftPt * 20));
+        int margR = Math.Max(240, (int)Math.Round(doc.MarginRightPt * 20));
+        int margT = Math.Max(240, (int)Math.Round(doc.MarginTopPt * 20));
+        int margB = Math.Max(240, (int)Math.Round(doc.MarginBottomPt * 20));
+        sb.AppendLine(string.Create(CultureInfo.InvariantCulture,
+            $@"\paperw{paperW}\paperh{paperH}\margl{margL}\margr{margR}\margt{margT}\margb{margB}\viewkind4\uc1"));
+
+        void EmitParagraph(RichParagraph p, bool inTable, bool emitPar)
+        {
+            sb.Append(inTable ? @"\pard\intbl" : @"\pard");
+            if (p.PageBreakBefore && !inTable)
+                sb.Append(@"\pagebb");
+
+            sb.Append(p.Alignment switch
+            {
+                RichAlignment.Center => @"\qc",
+                RichAlignment.Right => @"\qr",
+                RichAlignment.Justify => @"\qj",
+                _ => @"\ql"
+            });
+
+            int li = (int)Math.Round(p.IndentLeftPt * 20);
+            int ri = (int)Math.Round(p.IndentRightPt * 20);
+            int fi = (int)Math.Round(p.FirstLineIndentPt * 20);
+            if (p.IsListItem && fi == 0)
+            {
+                if (li < 360) li = 360 * (p.ListLevel + 1);
+                fi = -240;
+            }
+            if (li != 0) sb.Append(string.Create(CultureInfo.InvariantCulture, $@"\li{li}"));
+            if (ri != 0) sb.Append(string.Create(CultureInfo.InvariantCulture, $@"\ri{ri}"));
+            if (fi != 0) sb.Append(string.Create(CultureInfo.InvariantCulture, $@"\fi{fi}"));
+
+            int sbTwips = (int)Math.Round(p.SpaceBeforePt * 20);
+            int saTwips = (int)Math.Round(p.SpaceAfterPt * 20);
+            if (sbTwips > 0) sb.Append(string.Create(CultureInfo.InvariantCulture, $@"\sb{sbTwips}"));
+            if (saTwips > 0) sb.Append(string.Create(CultureInfo.InvariantCulture, $@"\sa{saTwips}"));
+            if (Math.Abs(p.LineSpacingMultiplier - 1.0f) > 0.05f)
+            {
+                int sl = Math.Clamp((int)Math.Round(p.LineSpacingMultiplier * 240), 200, 720);
+                sb.Append(string.Create(CultureInfo.InvariantCulture, $@"\sl{sl}\slmult1"));
+            }
+
+            if (p.BackgroundColorHex != null)
+            {
+                int bgIdx = EnsureColor(p.BackgroundColorHex);
+                if (bgIdx > 0) sb.Append(string.Create(CultureInfo.InvariantCulture, $@"\cbpat{bgIdx}"));
+            }
+            if (p.HasBottomBorder)
+                sb.Append(@"\brdrb\brdrs\brdrw10\brsp20");
+
+            if (p.IsListItem && !string.IsNullOrEmpty(p.ListMarker))
+            {
+                var firstRun = p.Runs.FirstOrDefault(r => !r.IsLineBreak && !r.IsPageBreak && !r.IsTab);
+                int markerFont = EnsureFont(firstRun?.FontFamily ?? doc.DefaultFontFamily);
+                int markerHalfPts = (int)Math.Round((firstRun?.FontSizePt ?? doc.DefaultFontSizePt) * 2);
+                int markerColor = EnsureColor(firstRun?.TextColorHex);
+                sb.Append('{').Append(string.Create(CultureInfo.InvariantCulture, $@"\f{markerFont}\fs{markerHalfPts}"));
+                if (markerColor > 0) sb.Append(string.Create(CultureInfo.InvariantCulture, $@"\cf{markerColor}"));
+                sb.Append(' ');
+                AppendRtfEscapedText(sb, p.ListMarker);
+                sb.Append(@"\tab }");
+            }
+
+            foreach (var run in p.Runs)
+            {
+                if (run.IsPageBreak)
+                {
+                    if (!inTable) sb.Append(@"\page ");
+                    continue;
+                }
+                if (run.IsLineBreak)
+                {
+                    sb.Append(@"\line ");
+                    continue;
+                }
+                if (run.IsTab)
+                {
+                    sb.Append(@"\tab ");
+                    continue;
+                }
+                if (string.IsNullOrEmpty(run.Text)) continue;
+
+                int fIdx = EnsureFont(run.FontFamily);
+                int halfPts = Math.Clamp((int)Math.Round(run.FontSizePt * 2), 10, 192);
+                int cfIdx = EnsureColor(run.TextColorHex);
+                int hlIdx = EnsureColor(run.HighlightColorHex);
+
+                sb.Append('{');
+                sb.Append(string.Create(CultureInfo.InvariantCulture, $@"\f{fIdx}\fs{halfPts}"));
+                if (run.Bold) sb.Append(@"\b");
+                if (run.Italic) sb.Append(@"\i");
+                if (run.Underline) sb.Append(@"\ul");
+                if (run.Strike) sb.Append(@"\strike");
+                if (run.VerticalAlign == RichVerticalAlign.Superscript) sb.Append(@"\super");
+                else if (run.VerticalAlign == RichVerticalAlign.Subscript) sb.Append(@"\sub");
+                if (cfIdx > 0) sb.Append(string.Create(CultureInfo.InvariantCulture, $@"\cf{cfIdx}"));
+                if (hlIdx > 0) sb.Append(string.Create(CultureInfo.InvariantCulture, $@"\highlight{hlIdx}"));
+                sb.Append(' ');
+                AppendRtfEscapedText(sb, run.Text);
+                sb.Append('}');
+            }
+
+            if (emitPar) sb.AppendLine(@"\par");
+        }
+
+        int contentWidthTwips = Math.Max(3600, paperW - margL - margR);
+        foreach (var block in doc.Blocks)
+        {
+            if (block is RichParagraph p)
+            {
+                EmitParagraph(p, inTable: false, emitPar: true);
+            }
+            else if (block is RichTable table)
+            {
+                foreach (var row in table.Rows)
+                {
+                    sb.Append(@"\trowd\trgaph108\trleft0");
+                    if (row.IsHeader) sb.Append(@"\trhdr");
+
+                    int totalUnits = Math.Max(1, row.Cells.Sum(c => Math.Max(1, c.GridSpan)));
+                    float[] cellWidths = ComputeTableRowWidthsTwips(table, row, contentWidthTwips, totalUnits);
+
+                    int rightEdge = 0;
+                    for (int c = 0; c < row.Cells.Count; c++)
+                    {
+                        var cell = row.Cells[c];
+                        rightEdge += Math.Max(360, (int)Math.Round(cellWidths[c]));
+                        sb.Append(@"\clbrdrt\brdrs\brdrw10\clbrdrl\brdrs\brdrw10\clbrdrb\brdrs\brdrw10\clbrdrr\brdrs\brdrw10");
+                        if (cell.ShadingColorHex != null)
+                        {
+                            int shadeIdx = EnsureColor(cell.ShadingColorHex);
+                            if (shadeIdx > 0) sb.Append(string.Create(CultureInfo.InvariantCulture, $@"\clcbpat{shadeIdx}"));
+                        }
+                        sb.Append(string.Create(CultureInfo.InvariantCulture, $@"\cellx{rightEdge}"));
+                    }
+                    sb.AppendLine();
+
+                    foreach (var cell in row.Cells)
+                    {
+                        for (int pi = 0; pi < cell.Paragraphs.Count; pi++)
+                        {
+                            bool isLast = pi == cell.Paragraphs.Count - 1;
+                            EmitParagraph(cell.Paragraphs[pi], inTable: true, emitPar: !isLast);
+                        }
+                        sb.AppendLine(@"\cell");
+                    }
+                    sb.AppendLine(@"\row");
+                }
+            }
+        }
+
+        sb.Append('}');
+        File.WriteAllText(rtfPath, sb.ToString(), Encoding.ASCII);
+    }
+
+    private static float[] ComputeTableRowWidthsTwips(RichTable table, RichTableRow row, int contentWidthTwips, int totalUnits)
+    {
+        float[] raw = new float[row.Cells.Count];
+        bool hasExplicit = false;
+        int gridCol = 0;
+        for (int i = 0; i < row.Cells.Count; i++)
+        {
+            var cell = row.Cells[i];
+            int span = Math.Max(1, cell.GridSpan);
+            float w = 0f;
+            if (table.ColumnWidthTwips.Count >= gridCol + span)
+            {
+                for (int s = 0; s < span; s++) w += table.ColumnWidthTwips[gridCol + s];
+                hasExplicit = true;
+            }
+            else if (cell.WidthTwips > 0f)
+            {
+                w = cell.WidthTwips;
+                hasExplicit = true;
+            }
+            raw[i] = w;
+            gridCol += span;
+        }
+
+        if (!hasExplicit || raw.Sum() <= 0f)
+        {
+            for (int i = 0; i < row.Cells.Count; i++)
+                raw[i] = (float)contentWidthTwips * Math.Max(1, row.Cells[i].GridSpan) / totalUnits;
+            return raw;
+        }
+
+        float sum = raw.Sum();
+        float scale = contentWidthTwips / sum;
+        for (int i = 0; i < raw.Length; i++)
+            raw[i] = raw[i] > 0f ? raw[i] * scale : (float)contentWidthTwips / row.Cells.Count;
+        return raw;
+    }
+
+    private static void AppendRtfEscapedText(StringBuilder sb, string text)
+    {
+        foreach (char c in text)
+        {
+            if (c == '\\' || c == '{' || c == '}')
+            {
+                sb.Append('\\').Append(c);
+            }
+            else if (c == '\t')
+            {
+                sb.Append(@"\tab ");
+            }
+            else if (c == '\n')
+            {
+                sb.Append(@"\line ");
+            }
+            else if (c == '\r')
+            {
+                // skip CR
+            }
+            else if (c >= 0x20 && c <= 0x7E)
+            {
+                sb.Append(c);
+            }
+            else if (c < 0x20)
+            {
+                sb.Append(' ');
+            }
+            else
+            {
+                short signed = unchecked((short)c);
+                sb.Append(string.Create(CultureInfo.InvariantCulture, $@"\u{signed}?"));
+            }
+        }
+    }
+}
+
+internal enum RichAlignment { Left, Center, Right, Justify }
+
+internal enum RichVerticalAlign { Baseline, Superscript, Subscript }
+
+internal sealed class RichDocument
+{
+    public List<RichBlock> Blocks { get; } = [];
+    public string DefaultFontFamily { get; set; } = "Calibri";
+    public float DefaultFontSizePt { get; set; } = 11f;
+    public float PageWidthPt { get; set; } = 595.28f;
+    public float PageHeightPt { get; set; } = 841.89f;
+    public float MarginTopPt { get; set; } = 56.7f;
+    public float MarginBottomPt { get; set; } = 56.7f;
+    public float MarginLeftPt { get; set; } = 56.7f;
+    public float MarginRightPt { get; set; } = 56.7f;
+
+    public bool HasAnyContent()
+    {
+        foreach (var block in Blocks)
+        {
+            if (block is RichParagraph p)
+            {
+                if (p.Runs.Any(r => !string.IsNullOrWhiteSpace(r.Text))) return true;
+            }
+            else if (block is RichTable t)
+            {
+                foreach (var row in t.Rows)
+                    foreach (var cell in row.Cells)
+                        if (cell.Paragraphs.Any(cp => cp.Runs.Any(r => !string.IsNullOrWhiteSpace(r.Text))))
+                            return true;
+            }
+        }
+        return false;
+    }
+}
+
+internal abstract class RichBlock;
+
+internal sealed class RichParagraph : RichBlock
+{
+    public List<RichRun> Runs { get; } = [];
+    public int HeadingLevel { get; set; }
+    public RichAlignment Alignment { get; set; } = RichAlignment.Left;
+    public float SpaceBeforePt { get; set; }
+    public float SpaceAfterPt { get; set; } = 6f;
+    public float LineSpacingMultiplier { get; set; } = 1.15f;
+    public float IndentLeftPt { get; set; }
+    public float IndentRightPt { get; set; }
+    public float FirstLineIndentPt { get; set; }
+    public bool PageBreakBefore { get; set; }
+    public bool IsListItem { get; set; }
+    public bool IsOrderedList { get; set; }
+    public int ListLevel { get; set; }
+    public string? ListMarker { get; set; }
+    public string? BackgroundColorHex { get; set; }
+    public bool HasBottomBorder { get; set; }
+}
+
+internal sealed class RichRun
+{
+    public string Text { get; set; } = "";
+    public bool Bold { get; set; }
+    public bool Italic { get; set; }
+    public bool Underline { get; set; }
+    public bool Strike { get; set; }
+    public RichVerticalAlign VerticalAlign { get; set; } = RichVerticalAlign.Baseline;
+    public string FontFamily { get; set; } = "Calibri";
+    public float FontSizePt { get; set; } = 11f;
+    public string? TextColorHex { get; set; }
+    public string? HighlightColorHex { get; set; }
+    public bool IsPageBreak { get; set; }
+    public bool IsLineBreak { get; set; }
+    public bool IsTab { get; set; }
+}
+
+internal sealed class RichTable : RichBlock
+{
+    public List<RichTableRow> Rows { get; } = [];
+    public List<float> ColumnWidthTwips { get; } = [];
+}
+
+internal sealed class RichTableRow
+{
+    public List<RichTableCell> Cells { get; } = [];
+    public bool IsHeader { get; set; }
+}
+
+internal sealed class RichTableCell
+{
+    public List<RichParagraph> Paragraphs { get; } = [];
+    public string? ShadingColorHex { get; set; }
+    public int GridSpan { get; set; } = 1;
+    public float WidthTwips { get; set; }
 }
 

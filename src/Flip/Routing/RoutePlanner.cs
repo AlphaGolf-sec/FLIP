@@ -230,7 +230,7 @@ public static class RoutePlanner
                 ["pdfa", "docx", "png", "jpg", "txt", "md", "html", "webp", "odt", "rtf", "epub"],
             ("txt", _) => ["md", "pdf", "docx", "html", "rtf", "odt", "pdfa", "json", "csv", "epub", "rst", "adoc"],
             (_, FormatCategory.TextAndMarkup) => ["txt", "md", "html", "pdf", "docx", "odt", "rtf", "pdfa", "json", "csv", "epub", "rst", "adoc"],
-            ("rtf", _) => ["docx", "pdf", "txt", "md", "html", "odt", "pdfa"],
+            ("rtf", _) => ["pdf", "docx", "txt", "md", "html", "odt", "pdfa"],
             (_, FormatCategory.DocumentAndEmail) => ["pdf", "txt", "md", "html", "odt", "rtf", "docx", "pdfa", "epub", "png", "jpg", "webp", "bmp", "gif", "tiff", "ico"],
             ("csv" or "tsv", _) or (_, FormatCategory.Spreadsheet) =>
                 ["csv", "xlsx", "tsv", "json", "xml", "yaml", "html", "md", "pdf", "ods", "toml", "ini"],
@@ -355,9 +355,12 @@ public static class RoutePlanner
                 // OpenXML HTML/Markdown is a text/table export. Prefer the richer document reader.
                 if (engine.Id == "openxml_builtin" && (edge.SourceExtension is "docx" or "odt") &&
                     (edge.TargetExtension is "html" or "md")) cost += 20;
-                // DOCX text extraction discards the page layout. Prefer LibreOffice whenever available.
-                if (IsDocxToPdf(edge.SourceExtension, edge.TargetExtension) && engine.Id == "pdf_builtin")
-                    cost += 15;
+                // Prefer LibreOffice over simplified built-in / Pandoc converters for Office document layout fidelity.
+                if (IsOfficeDocumentToPdf(edge.SourceExtension, edge.TargetExtension) && engine.Id == "pdf_builtin")
+                    cost += 20;
+                if (IsOfficeWordFormat(edge.SourceExtension) && IsOfficeWordFormat(edge.TargetExtension) &&
+                    engine.Id is "openxml_builtin" or "pandoc")
+                    cost += 20;
                 var adjusted = new ConversionEdge(edge.SourceExtension, edge.TargetExtension, edge.EngineId, cost);
                 outgoing.Add(new PlannedHop(adjusted, engine));
             }
@@ -381,7 +384,7 @@ public static class RoutePlanner
         if (engineId != "libreoffice") return true;
         return edge.TargetExtension switch
         {
-            "docx" or "odt" => edge.SourceExtension is "doc" or "docx" or "odt" or "rtf" or "wps" or "pages",
+            "docx" or "odt" or "rtf" => edge.SourceExtension is "doc" or "docx" or "odt" or "rtf" or "wps" or "pages",
             "xlsx" or "ods" => edge.SourceExtension is "xls" or "xlsx" or "ods" or "csv" or "numbers",
             "pptx" or "odp" => edge.SourceExtension is "ppt" or "pptx" or "odp" or "key",
             "txt" => edge.SourceExtension is "doc" or "docx" or "odt" or "rtf" or "wps" or "pages",
@@ -424,7 +427,7 @@ public static class RoutePlanner
         if (CanonicalExtension(sourceExtension) == CanonicalExtension(targetExtension)) return false;
 
         if (IsDocxToPdf(sourceExtension, targetExtension))
-            return hops.Count == 1 && hops[0].Engine.Id == "libreoffice";
+            return hops.Count == 1 && hops[0].Engine.Id is "libreoffice" or "pdf_builtin";
 
         // This Word export reconstructs editable text from the PDF, then saves a real Word 97–2003 file.
         if (targetExtension == "doc")
@@ -710,7 +713,9 @@ public static class RoutePlanner
         IProgress<double>? progress,
         CancellationToken ct)
     {
-        if (IsDocxToPdf(route.SourceExtension, route.TargetExtension) && RequestsMetadataRemoval(parameters))
+        // The built-in exporter strips metadata itself; LibreOffice cannot.
+        if (IsDocxToPdf(route.SourceExtension, route.TargetExtension) &&
+            route.Hops[0].Engine.Id == "libreoffice" && RequestsMetadataRemoval(parameters))
             throw new IOException(Loc.T(
                 "La conversione DOCX → PDF con impaginazione non supporta la rimozione dei metadati. Disattiva la rimozione nel preset PDF per continuare.",
                 "Layout-preserving DOCX to PDF conversion does not support metadata removal. Turn off metadata removal in the PDF preset to continue."));
@@ -855,10 +860,12 @@ public static class RoutePlanner
     {
         bool stripMetadata = RequestsMetadataRemoval(context.CustomParameters);
         if (stripMetadata && hop.Engine.Id == "libreoffice" &&
-            IsDocxToPdf(context.SourceExtension, context.TargetExtension) &&
+            context.SourceExtension is "docx" or "odt" or "rtf" &&
+            context.TargetExtension == "pdf" &&
             _engines.TryGetValue("pdf_builtin", out var privacyEngine))
         {
-            // Retain the existing behavior for intermediate PDFs in multi-hop routes.
+            // LibreOffice can copy document properties into PDF. The built-in exporter honors this preset.
+            // A direct DOCX -> PDF export is refused earlier, so for DOCX this only covers intermediate PDFs.
             return privacyEngine.ConvertAsync(context);
         }
 
@@ -879,6 +886,11 @@ public static class RoutePlanner
     private static bool RequestsMetadataRemoval(Dictionary<string, string>? parameters) =>
         parameters is not null && parameters.TryGetValue("strip_metadata", out var value) &&
         (value.Equals("true", StringComparison.OrdinalIgnoreCase) || value == "1");
+
+    private static bool IsOfficeWordFormat(string extension) => extension is "doc" or "docx" or "odt" or "rtf";
+
+    private static bool IsOfficeDocumentToPdf(string source, string target) =>
+        IsOfficeWordFormat(source) && target is "pdf" or "pdfa";
 
     private static void AddStagedOutputs(EngineExecutionResult result, string requestedPath, PlannedHop hop, List<string> outputs)
     {

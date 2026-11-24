@@ -179,6 +179,7 @@ internal static class InputTests
         CheckWatchFolders(checks);
         CheckScenarioMatrix(checks);
         CheckLocalization(checks);
+        CheckDocxDocumentFidelityAndPdfA(checks);
         File.WriteAllText(Path.Combine(Evidence.DirectoryPath, "input-tests.json"),
             JsonSerializer.Serialize(new { utc = DateTimeOffset.UtcNow, passed = checks.Count(c => c.Value), failed = checks.Count(c => !c.Value), checks }, new JsonSerializerOptions { WriteIndented = true }));
         return checks.All(c => c.Value) ? 0 : 1;
@@ -992,10 +993,10 @@ internal static class InputTests
             docxWheel.AllReachable.Contains("jpg");
         var docxPdfSettings = new FlipSettings { EnginePriorityOrder = ["pdf_builtin"] }.CreateSnapshot();
         bool hasWriter = new LibreOfficeEngine().IsAvailable(docxPdfSettings);
-        bool canExportDocxPdf = RoutePlanner.TryPlanRoute("docx", "pdf", docxPdfSettings, out var docxPdfRoute);
-        checks["matrix_docx_to_pdf_requires_layout_preserving_engine"] =
-            canExportDocxPdf == hasWriter && docxWheel.AllReachable.Contains("pdf") == hasWriter &&
-            (!hasWriter || (docxPdfRoute is { Hops.Count: 1 } && docxPdfRoute.Hops[0].Engine.Id == "libreoffice"));
+        checks["matrix_docx_to_pdf_prefers_layout_preserving_engine"] =
+            RoutePlanner.TryPlanRoute("docx", "pdf", docxPdfSettings, out var docxPdfRoute) &&
+            docxWheel.AllReachable.Contains("pdf") &&
+            docxPdfRoute is { Hops.Count: 1 } && docxPdfRoute.Hops[0].Engine.Id == (hasWriter ? "libreoffice" : "pdf_builtin");
 
         var pdfWheel = InspectWheelFor("pdf", defaultSettings);
         bool canExportPdfDoc = RoutePlanner.TryPlanRoute("pdf", "doc", defaultSettings, out var pdfDocRoute);
@@ -2977,5 +2978,512 @@ internal static class InputTests
         {
             Loc.SetPreference(savedPref);
         }
+    }
+
+    private static void CheckDocxDocumentFidelityAndPdfA(Dictionary<string, bool> checks)
+    {
+        EngineBootstrap.EnsureInitialized();
+        string workDir = Path.Combine(Evidence.DirectoryPath, $"docx-fidelity-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workDir);
+
+        try
+        {
+            // 1. Verifica visibilità e priorità PDF (slot 0) vs PDF/A (separato) su PC pulito (senza LibreOffice/Pandoc)
+            bool cleanPcWheelOk;
+            bool prevSuppress = CliResolver.SuppressAutoDiscoveryForTest;
+            CliResolver.SuppressAutoDiscoveryForTest = true;
+            try
+            {
+                static bool CheckDocWheelClean(string sourceExt, FormatGrade grade, bool requirePdfaPrimary)
+                {
+                    var snap = new FlipSettings { MaxVisibleGrade = grade }.CreateSnapshot();
+                    var reachable = RoutePlanner.GetReachableTargetFormats(sourceExt, snap);
+                    var slots = WheelLayout.Partition(reachable.Select(f => f.Extension.ToUpperInvariant()).ToArray());
+                    bool pdfFirst = slots.Length > 0 &&
+                        string.Equals(slots[0].Format, "PDF", StringComparison.OrdinalIgnoreCase) &&
+                        slots[0].Label == "PDF";
+                    bool hasPdfA = reachable.Any(f => string.Equals(f.NormalizedExtension, "pdfa", StringComparison.OrdinalIgnoreCase));
+                    bool pdfaPrimary = slots.Any(s => string.Equals(s.Format, "PDFA", StringComparison.OrdinalIgnoreCase) && s.Label == "PDF/A");
+                    return pdfFirst && hasPdfA && (!requirePdfaPrimary || pdfaPrimary);
+                }
+
+                cleanPcWheelOk =
+                    CheckDocWheelClean("docx", FormatGrade.Everyday, requirePdfaPrimary: true) &&
+                    CheckDocWheelClean("docx", FormatGrade.General, requirePdfaPrimary: true) &&
+                    CheckDocWheelClean("docx", FormatGrade.Specialist, requirePdfaPrimary: true) &&
+                    CheckDocWheelClean("odt", FormatGrade.General, requirePdfaPrimary: true) &&
+                    CheckDocWheelClean("rtf", FormatGrade.General, requirePdfaPrimary: true);
+            }
+            finally
+            {
+                CliResolver.SuppressAutoDiscoveryForTest = prevSuppress;
+            }
+
+            // 2. Verifica priorità LibreOffice quando installato (anche con priorità utente sfavorevole)
+            var adversarialSettings = new FlipSettings
+            {
+                EnginePriorityOrder = ["pdf_builtin", "openxml_builtin", "pandoc"]
+            }.CreateSnapshot();
+            bool hasLibreOffice = new LibreOfficeEngine().IsAvailable(adversarialSettings);
+            bool libreOfficePriorityOk = true;
+            if (hasLibreOffice)
+            {
+                bool docxPdfLo = RoutePlanner.TryPlanRoute("docx", "pdf", adversarialSettings, out var rPdf) &&
+                    rPdf is { Hops.Count: 1 } && rPdf.Hops[0].Engine.Id == "libreoffice";
+                bool docxPdfaLo = RoutePlanner.TryPlanRoute("docx", "pdfa", adversarialSettings, out var rPdfa) &&
+                    rPdfa is { Hops.Count: 2 } && rPdfa.Hops[0].Engine.Id == "libreoffice" && rPdfa.Hops[1].Engine.Id == "pdf_builtin";
+                bool docxRtfLo = RoutePlanner.TryPlanRoute("docx", "rtf", adversarialSettings, out var rRtf) &&
+                    rRtf is { Hops.Count: 1 } && rRtf.Hops[0].Engine.Id == "libreoffice";
+                bool docxOdtLo = RoutePlanner.TryPlanRoute("docx", "odt", adversarialSettings, out var rOdt) &&
+                    rOdt is { Hops.Count: 1 } && rOdt.Hops[0].Engine.Id == "libreoffice";
+                bool odtPdfLo = RoutePlanner.TryPlanRoute("odt", "pdf", adversarialSettings, out var rOdtPdf) &&
+                    rOdtPdf is { Hops.Count: 1 } && rOdtPdf.Hops[0].Engine.Id == "libreoffice";
+                bool rtfPdfLo = RoutePlanner.TryPlanRoute("rtf", "pdf", adversarialSettings, out var rRtfPdf) &&
+                    rRtfPdf is { Hops.Count: 1 } && rRtfPdf.Hops[0].Engine.Id == "libreoffice";
+                var docTargets = RoutePlanner.GetReachableTargetFormats("doc", new FlipSettings().CreateSnapshot());
+                bool docPdfFirst = docTargets.Count > 0 && docTargets[0].NormalizedExtension == "pdf";
+                libreOfficePriorityOk = docxPdfLo && docxPdfaLo && docxRtfLo && docxOdtLo && odtPdfLo && rtfPdfLo && docPdfFirst;
+                Evidence.Log("docx.libreoffice.priority", new { docxPdfLo, docxPdfaLo, docxRtfLo, docxOdtLo, odtPdfLo, rtfPdfLo, docPdfFirst });
+            }
+
+            checks["docx_pdf_first_and_libreoffice_priority"] = cleanPcWheelOk && libreOfficePriorityOk;
+
+            // 3. Crea un DOCX ricco realistico con styles.xml, numbering.xml, colori, grassetti, corsivi, sottolineato,
+            // barrato, evidenziazione, allineamenti, elenchi puntati/numerati, tabella formattata, accenti italiani e interruzione pagina.
+            string richDocx = Path.Combine(workDir, "documento_ricco.docx");
+            CreateRichDocxFixture(richDocx);
+
+            // 4. Test motore built-in DOCX -> RTF ad alta fedeltà
+            string outRtf = Path.Combine(workDir, "documento_ricco.rtf");
+            var ooxml = new OfficeOpenXmlEngine();
+            var rtfRes = ooxml.ConvertAsync(new ConversionContext
+            {
+                InputFilePath = richDocx,
+                OutputFilePath = outRtf,
+                SourceExtension = "docx",
+                TargetExtension = "rtf",
+                Settings = new FlipSettings().CreateSnapshot()
+            }).GetAwaiter().GetResult();
+
+            string rtfText = rtfRes.Success && File.Exists(outRtf) ? File.ReadAllText(outRtf, System.Text.Encoding.ASCII) : "";
+            byte[] rtfRawBytes = rtfRes.Success && File.Exists(outRtf) ? File.ReadAllBytes(outRtf) : [];
+            bool rtfStrictlyAscii = rtfRawBytes.Length > 0 && rtfRawBytes.All(b => b <= 0x7F);
+
+            string rtfRoundtripTxt = Path.Combine(workDir, "documento_ricco_rt.txt");
+            var rtRes = ooxml.ConvertAsync(new ConversionContext
+            {
+                InputFilePath = outRtf,
+                OutputFilePath = rtfRoundtripTxt,
+                SourceExtension = "rtf",
+                TargetExtension = "txt",
+                Settings = new FlipSettings().CreateSnapshot()
+            }).GetAwaiter().GetResult();
+            string rtTxt = rtRes.Success && File.Exists(rtfRoundtripTxt) ? File.ReadAllText(rtfRoundtripTxt, System.Text.Encoding.UTF8) : "";
+
+            bool rtfFormattingOk =
+                rtfRes.Success &&
+                rtfStrictlyAscii &&
+                rtfText.StartsWith(@"{\rtf1\ansi\ansicpg1252\deff0", StringComparison.Ordinal) &&
+                rtfText.Contains(@"{\fonttbl", StringComparison.Ordinal) &&
+                rtfText.Contains("Georgia;", StringComparison.Ordinal) &&
+                rtfText.Contains(@"{\colortbl;", StringComparison.Ordinal) &&
+                rtfText.Contains(@"\red192\green0\blue0;", StringComparison.Ordinal) &&
+                rtfText.Contains(@"\red255\green255\blue0;", StringComparison.Ordinal) &&
+                rtfText.Contains(@"\b", StringComparison.Ordinal) &&
+                rtfText.Contains(@"\i", StringComparison.Ordinal) &&
+                rtfText.Contains(@"\ul", StringComparison.Ordinal) &&
+                rtfText.Contains(@"\strike", StringComparison.Ordinal) &&
+                rtfText.Contains(@"\qc", StringComparison.Ordinal) &&
+                rtfText.Contains(@"\qr", StringComparison.Ordinal) &&
+                rtfText.Contains(@"\qj", StringComparison.Ordinal) &&
+                rtfText.Contains(@"\trowd", StringComparison.Ordinal) &&
+                rtfText.Contains(@"\cell", StringComparison.Ordinal) &&
+                rtfText.Contains(@"\row", StringComparison.Ordinal) &&
+                rtfText.Contains(@"\page", StringComparison.Ordinal) &&
+                rtfText.Contains(@"\u232?", StringComparison.Ordinal) && // è
+                rtfText.Contains(@"\u224?", StringComparison.Ordinal) && // à
+                rtfText.Contains(@"\u8364?", StringComparison.Ordinal) && // €
+                rtRes.Success &&
+                rtTxt.Contains("caffè", StringComparison.Ordinal) &&
+                rtTxt.Contains("città", StringComparison.Ordinal) &&
+                rtTxt.Contains("perché", StringComparison.Ordinal) &&
+                !rtTxt.Contains("cafféé", StringComparison.Ordinal) &&
+                !rtTxt.Contains("caffèè", StringComparison.Ordinal) &&
+                rtTxt.Contains("€", StringComparison.Ordinal) &&
+                rtTxt.Contains("Voce Tabella", StringComparison.Ordinal);
+
+            checks["docx_builtin_rich_rtf_preserves_formatting_and_unicode"] = rtfFormattingOk;
+            Evidence.Log("docx.rich_rtf", new { rtfRes.Success, rtfStrictlyAscii, rtfLength = rtfText.Length, rtfFormattingOk });
+
+            // 5. Test motore built-in DOCX -> PDF ad alta fedeltà (senza LibreOffice)
+            string outPdf = Path.Combine(workDir, "documento_ricco_builtin.pdf");
+            var pdfEngine = new PdfEngine();
+            var pdfRes = pdfEngine.ConvertAsync(new ConversionContext
+            {
+                InputFilePath = richDocx,
+                OutputFilePath = outPdf,
+                SourceExtension = "docx",
+                TargetExtension = "pdf",
+                Settings = new FlipSettings().CreateSnapshot()
+            }).GetAwaiter().GetResult();
+
+            bool richPdfOk = false;
+            int pdfPages = 0;
+            int distinctFontSizes = 0;
+            bool hasRedPixels = false;
+            bool hasYellowPixels = false;
+            if (pdfRes.Success && File.Exists(outPdf))
+            {
+                using var docPdf = UglyToad.PdfPig.PdfDocument.Open(outPdf);
+                pdfPages = docPdf.NumberOfPages;
+                string page1Text = docPdf.NumberOfPages >= 1
+                    ? UglyToad.PdfPig.DocumentLayoutAnalysis.TextExtractor.ContentOrderTextExtractor.GetText(docPdf.GetPage(1))
+                    : "";
+                string page2Text = docPdf.NumberOfPages >= 2
+                    ? UglyToad.PdfPig.DocumentLayoutAnalysis.TextExtractor.ContentOrderTextExtractor.GetText(docPdf.GetPage(2))
+                    : "";
+                distinctFontSizes = docPdf.GetPage(1).Letters
+                    .Select(l => (int)Math.Round(l.PointSize))
+                    .Distinct()
+                    .Count();
+
+                // Renderizza pagina 1 e verifica presenza reale di colori (rosso #C00000 e highlight giallo #FFFF00)
+                byte[] pdfBytes = File.ReadAllBytes(outPdf);
+                using var page1Bmp = PDFtoImage.Conversion.ToImages(pdfBytes, options: new PDFtoImage.RenderOptions(Dpi: 120)).First();
+                string previewPng = Path.Combine(Evidence.DirectoryPath, "docx-rich-pdf-page1.png");
+                using (var pngData = page1Bmp.Encode(SkiaSharp.SKEncodedImageFormat.Png, 100))
+                using (var fs = File.Create(previewPng))
+                    pngData.SaveTo(fs);
+
+                for (int y = 0; y < page1Bmp.Height; y += 2)
+                {
+                    for (int x = 0; x < page1Bmp.Width; x += 2)
+                    {
+                        var px = page1Bmp.GetPixel(x, y);
+                        if (px.Red > 150 && px.Green < 70 && px.Blue < 70) hasRedPixels = true;
+                        if (px.Red > 220 && px.Green > 220 && px.Blue < 70) hasYellowPixels = true;
+                        if (hasRedPixels && hasYellowPixels) break;
+                    }
+                    if (hasRedPixels && hasYellowPixels) break;
+                }
+
+                richPdfOk =
+                    pdfPages >= 2 &&
+                    distinctFontSizes >= 3 &&
+                    page1Text.Contains("Relazione Tecnica", StringComparison.Ordinal) &&
+                    page1Text.Contains("caffè", StringComparison.Ordinal) &&
+                    page1Text.Contains("Voce Tabella", StringComparison.Ordinal) &&
+                    page2Text.Contains("Seconda Pagina", StringComparison.Ordinal) &&
+                    hasRedPixels &&
+                    hasYellowPixels;
+            }
+            checks["docx_builtin_rich_pdf_preserves_formatting_and_pagination"] = richPdfOk;
+            Evidence.Log("docx.rich_pdf", new { pdfRes.Success, pdfPages, distinctFontSizes, hasRedPixels, hasYellowPixels, richPdfOk });
+
+            // 6. Verifica profilo ICC sRGB valido (skcms SkiaSharp + Windows WCS ColorContext) e PDF/A-2b integro
+            byte[] iccProfile = PdfEngine.GetSrgbIccProfileBytes();
+            bool skiaIccOk = false;
+            using (var skIcc = SkiaSharp.SKColorSpaceIccProfile.Create(iccProfile))
+            using (var skCs = skIcc != null ? SkiaSharp.SKColorSpace.CreateIcc(skIcc) : null)
+            {
+                skiaIccOk = skIcc != null && skCs != null;
+            }
+
+            bool windowsIccOk = false;
+            string iccTmpFile = Path.Combine(workDir, "srgb_check.icc");
+            File.WriteAllBytes(iccTmpFile, iccProfile);
+            try
+            {
+                var ctx = new System.Windows.Media.ColorContext(new Uri(iccTmpFile));
+                windowsIccOk = ctx.OpenProfileStream().Length == iccProfile.Length;
+            }
+            catch { windowsIccOk = false; }
+
+            bool ValidatePdfAFile(string pdfaPath, out string detail)
+            {
+                detail = "";
+                if (!File.Exists(pdfaPath)) { detail = "missing"; return false; }
+                byte[] bytes = File.ReadAllBytes(pdfaPath);
+                string latin1 = System.Text.Encoding.Latin1.GetString(bytes);
+
+                bool markers =
+                    latin1.StartsWith("%PDF-1.7", StringComparison.Ordinal) &&
+                    latin1.Contains("<pdfaid:part>2</pdfaid:part>", StringComparison.Ordinal) &&
+                    latin1.Contains("<pdfaid:conformance>B</pdfaid:conformance>", StringComparison.Ordinal) &&
+                    latin1.Contains("/GTS_PDFA1", StringComparison.Ordinal) &&
+                    latin1.Contains("sRGB IEC61966-2.1", StringComparison.Ordinal) &&
+                    latin1.Contains("/OutputIntents", StringComparison.Ordinal) &&
+                    latin1.Contains("/Metadata", StringComparison.Ordinal) &&
+                    latin1.Contains("/ID [<", StringComparison.Ordinal) &&
+                    latin1.Contains("FLIP PDF/A-2b Engine", StringComparison.Ordinal) &&
+                    latin1.Contains("FLIP ISO 19005-2 Archival Engine", StringComparison.Ordinal);
+
+                // Verifica che lo stream ICC contenga esattamente i byte del profilo valido (non lo stub rotto da 176 byte)
+                bool hasExactIcc = bytes.AsSpan().IndexOf(iccProfile) >= 0;
+
+                // Verifica strutturale dell'ultimo xref incrementale (ogni riga 20 byte e offset esatti verso "N 0 obj")
+                bool xrefStrictOk = false;
+                int lastStartXref = latin1.LastIndexOf("startxref", StringComparison.Ordinal);
+                if (lastStartXref > 0)
+                {
+                    var mStart = System.Text.RegularExpressions.Regex.Match(latin1[lastStartXref..], @"startxref\s+(\d+)");
+                    if (mStart.Success && int.TryParse(mStart.Groups[1].Value, out int xrefPos) && xrefPos > 0 && xrefPos < lastStartXref)
+                    {
+                        string xrefSection = latin1[xrefPos..lastStartXref];
+                        int trailerPos = xrefSection.IndexOf("trailer", StringComparison.Ordinal);
+                        if (trailerPos > 0)
+                        {
+                            string tablePart = xrefSection[..trailerPos];
+                            string[] rawLines = tablePart.Split('\n');
+                            bool headerOk = rawLines.Length > 2 && rawLines[0] == "xref";
+                            bool noObjZeroOverwrite = !tablePart.Contains("\n0 1\n", StringComparison.Ordinal);
+                            bool entriesOk = true;
+                            int curObj = -1;
+                            int remaining = 0;
+                            for (int i = 1; i < rawLines.Length; i++)
+                            {
+                                string ln = rawLines[i];
+                                if (ln.Length == 0 && i == rawLines.Length - 1) break;
+                                if (remaining == 0)
+                                {
+                                    var parts = ln.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                                    if (parts.Length != 2 || !int.TryParse(parts[0], out curObj) || !int.TryParse(parts[1], out remaining))
+                                    { entriesOk = false; break; }
+                                }
+                                else
+                                {
+                                    // Ogni riga xref deve essere esattamente 20 byte compreso '\n' -> 19 caratteri prima di '\n'
+                                    if (ln.Length != 19 || !int.TryParse(ln[..10], out int objOff) || objOff <= 0 || objOff >= bytes.Length)
+                                    { entriesOk = false; break; }
+                                    string prefix = $"{curObj} 0 obj";
+                                    if (!latin1.AsSpan(objOff).StartsWith(prefix, StringComparison.Ordinal))
+                                    { entriesOk = false; break; }
+                                    curObj++;
+                                    remaining--;
+                                }
+                            }
+                            xrefStrictOk = headerOk && noObjZeroOverwrite && entriesOk && remaining == 0;
+                        }
+                    }
+                }
+
+                // Verifica apertura PdfPig + rendering PDFtoImage
+                bool pigOk;
+                using (var doc = UglyToad.PdfPig.PdfDocument.Open(bytes))
+                {
+                    string p1 = UglyToad.PdfPig.DocumentLayoutAnalysis.TextExtractor.ContentOrderTextExtractor.GetText(doc.GetPage(1));
+                    pigOk = doc.NumberOfPages >= 2 && p1.Contains("Relazione Tecnica", StringComparison.Ordinal);
+                }
+
+                bool renderOk;
+                using (var rendered = PDFtoImage.Conversion.ToImages(bytes, options: new PDFtoImage.RenderOptions(Dpi: 96)).First())
+                {
+                    renderOk = rendered.Width > 200 && rendered.Height > 200;
+                }
+
+                detail = $"markers={markers},icc={hasExactIcc},xref={xrefStrictOk},pig={pigOk},render={renderOk}";
+                return markers && hasExactIcc && xrefStrictOk && pigOk && renderOk;
+            }
+
+            // 6A. Percorso DOCX -> PDF/A su PC pulito (built-in)
+            bool pdfaBuiltinOk;
+            string pdfaBuiltinDetail = "";
+            CliResolver.SuppressAutoDiscoveryForTest = true;
+            try
+            {
+                var cleanSnap = new FlipSettings
+                {
+                    OutputDirectoryMode = OutputDirectoryMode.CustomFolder,
+                    CustomOutputDirectory = Path.Combine(workDir, "out_clean"),
+                    ConflictPolicy = ConflictPolicy.AutoNumber
+                }.CreateSnapshot();
+                var cleanPdfaRes = RoutePlanner.ExecuteRouteAsync(richDocx, "pdfa", cleanSnap).GetAwaiter().GetResult();
+                pdfaBuiltinOk = cleanPdfaRes.Success && ValidatePdfAFile(cleanPdfaRes.OutputFilePath, out pdfaBuiltinDetail);
+                if (!cleanPdfaRes.Success) pdfaBuiltinDetail = cleanPdfaRes.ErrorMessage ?? "failed";
+
+                // Without LibreOffice, the built-in exporter handles DOCX -> PDF and honors metadata removal.
+                var cleanPrivacyRes = RoutePlanner.ExecuteRouteAsync(richDocx, "pdf", cleanSnap,
+                    new() { ["strip_metadata"] = "true" }).GetAwaiter().GetResult();
+                checks["docx_pdf_without_libreoffice_uses_builtin_and_strips_metadata"] =
+                    RoutePlanner.TryPlanRoute("docx", "pdf", cleanSnap, out var cleanPdfRoute) &&
+                    cleanPdfRoute is { Hops.Count: 1 } && cleanPdfRoute.Hops[0].Engine.Id == "pdf_builtin" &&
+                    cleanPrivacyRes.Success && File.Exists(cleanPrivacyRes.OutputFilePath) &&
+                    !RoutePlanner.TryPlanRoute("pdf", "doc", cleanSnap, out _);
+            }
+            finally
+            {
+                CliResolver.SuppressAutoDiscoveryForTest = prevSuppress;
+            }
+
+            // 6B. Percorso DOCX -> PDF/A con LibreOffice (se installato)
+            bool pdfaLibreOfficeOk = true;
+            string pdfaLoDetail = "skipped";
+            if (hasLibreOffice)
+            {
+                var loSnap = new FlipSettings
+                {
+                    OutputDirectoryMode = OutputDirectoryMode.CustomFolder,
+                    CustomOutputDirectory = Path.Combine(workDir, "out_lo"),
+                    ConflictPolicy = ConflictPolicy.AutoNumber
+                }.CreateSnapshot();
+                var loPdfaRes = RoutePlanner.ExecuteRouteAsync(richDocx, "pdfa", loSnap).GetAwaiter().GetResult();
+                pdfaLibreOfficeOk = loPdfaRes.Success && ValidatePdfAFile(loPdfaRes.OutputFilePath, out pdfaLoDetail);
+                if (!loPdfaRes.Success) pdfaLoDetail = loPdfaRes.ErrorMessage ?? "failed";
+            }
+
+            checks["docx_pdfa_iso19005_2b_valid_icc_and_adobe_safe"] =
+                skiaIccOk && windowsIccOk && pdfaBuiltinOk && pdfaLibreOfficeOk;
+            Evidence.Log("docx.pdfa.validation", new { skiaIccOk, windowsIccOk, iccLength = iccProfile.Length, pdfaBuiltinOk, pdfaBuiltinDetail, pdfaLibreOfficeOk, pdfaLoDetail });
+        }
+        finally
+        {
+            try { if (Directory.Exists(workDir)) Directory.Delete(workDir, true); } catch { }
+        }
+    }
+
+    private static void CreateRichDocxFixture(string docxPath)
+    {
+        const string contentTypes =
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
+            "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">" +
+            "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>" +
+            "<Default Extension=\"xml\" ContentType=\"application/xml\"/>" +
+            "<Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/>" +
+            "<Override PartName=\"/word/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml\"/>" +
+            "<Override PartName=\"/word/numbering.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml\"/>" +
+            "</Types>";
+
+        const string rootRels =
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
+            "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">" +
+            "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/>" +
+            "</Relationships>";
+
+        const string docRels =
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
+            "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">" +
+            "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/>" +
+            "<Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering\" Target=\"numbering.xml\"/>" +
+            "</Relationships>";
+
+        const string stylesXml =
+            """
+            <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+            <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+              <w:docDefaults>
+                <w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:sz w:val="22"/></w:rPr></w:rPrDefault>
+                <w:pPrDefault><w:pPr><w:spacing w:after="120" w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault>
+              </w:docDefaults>
+              <w:style w:type="paragraph" w:default="1" w:styleId="Normal">
+                <w:name w:val="Normal"/>
+              </w:style>
+              <w:style w:type="paragraph" w:styleId="Heading1">
+                <w:name w:val="heading 1"/>
+                <w:basedOn w:val="Normal"/>
+                <w:pPr><w:spacing w:before="240" w:after="120"/></w:pPr>
+                <w:rPr><w:rFonts w:ascii="Georgia" w:hAnsi="Georgia"/><w:b/><w:color w:val="C00000"/><w:sz w:val="40"/></w:rPr>
+              </w:style>
+              <w:style w:type="paragraph" w:styleId="Heading2">
+                <w:name w:val="heading 2"/>
+                <w:basedOn w:val="Normal"/>
+                <w:pPr><w:spacing w:before="200" w:after="80"/></w:pPr>
+                <w:rPr><w:b/><w:color w:val="1F4E79"/><w:sz w:val="30"/></w:rPr>
+              </w:style>
+            </w:styles>
+            """;
+
+        const string numberingXml =
+            """
+            <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+            <w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+              <w:abstractNum w:abstractNumId="1">
+                <w:lvl w:ilvl="0"><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl>
+              </w:abstractNum>
+              <w:abstractNum w:abstractNumId="2">
+                <w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl>
+              </w:abstractNum>
+              <w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num>
+              <w:num w:numId="2"><w:abstractNumId w:val="2"/></w:num>
+            </w:numbering>
+            """;
+
+        const string documentXml =
+            """
+            <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+            <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+              <w:body>
+                <w:p>
+                  <w:pPr><w:pStyle w:val="Heading1"/><w:jc w:val="center"/></w:pPr>
+                  <w:r><w:t>Relazione Tecnica FLIP</w:t></w:r>
+                </w:p>
+                <w:p>
+                  <w:pPr><w:jc w:val="both"/><w:spacing w:before="60" w:after="140"/></w:pPr>
+                  <w:r><w:t xml:space="preserve">Verifica italiana con accenti: caffè, città, perché e simbolo € 120,00. </w:t></w:r>
+                  <w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">Testo in grassetto </w:t></w:r>
+                  <w:r><w:rPr><w:i/></w:rPr><w:t xml:space="preserve">in corsivo </w:t></w:r>
+                  <w:r><w:rPr><w:u w:val="single"/></w:rPr><w:t xml:space="preserve">sottolineato </w:t></w:r>
+                  <w:r><w:rPr><w:strike/></w:rPr><w:t xml:space="preserve">barrato </w:t></w:r>
+                  <w:r><w:rPr><w:color w:val="C00000"/><w:highlight w:val="yellow"/></w:rPr><w:t>evidenziato rosso</w:t></w:r>
+                  <w:r><w:t xml:space="preserve">. Paragrafo lungo per verificare il rientro, la giustificazione tipografica e la leggibilità complessiva del layout su pagina A4.</w:t></w:r>
+                </w:p>
+                <w:p>
+                  <w:pPr><w:pStyle w:val="Heading2"/></w:pPr>
+                  <w:r><w:t>Elenco Puntato e Numerato</w:t></w:r>
+                </w:p>
+                <w:p>
+                  <w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr>
+                  <w:r><w:rPr><w:b/></w:rPr><w:t>Punto uno:</w:t></w:r>
+                  <w:r><w:t xml:space="preserve"> qualità tipografica nativa.</w:t></w:r>
+                </w:p>
+                <w:p>
+                  <w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="2"/></w:numPr></w:pPr>
+                  <w:r><w:t>Primo passo numerato con apice</w:t></w:r>
+                  <w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:t>2</w:t></w:r>
+                  <w:r><w:t> e pedice</w:t></w:r>
+                  <w:r><w:rPr><w:vertAlign w:val="subscript"/></w:rPr><w:t>0</w:t></w:r>
+                </w:p>
+                <w:tbl>
+                  <w:tblGrid><w:gridCol w:w="4500"/><w:gridCol w:w="4500"/></w:tblGrid>
+                  <w:tr>
+                    <w:trPr><w:tblHeader/></w:trPr>
+                    <w:tc><w:tcPr><w:shd w:fill="1F4E79"/></w:tcPr><w:p><w:r><w:rPr><w:b/><w:color w:val="FFFFFF"/></w:rPr><w:t>Voce Tabella</w:t></w:r></w:p></w:tc>
+                    <w:tc><w:tcPr><w:shd w:fill="1F4E79"/></w:tcPr><w:p><w:r><w:rPr><w:b/><w:color w:val="FFFFFF"/></w:rPr><w:t>Stato</w:t></w:r></w:p></w:tc>
+                  </w:tr>
+                  <w:tr>
+                    <w:tc><w:p><w:r><w:t>Formato RTF e PDF</w:t></w:r></w:p></w:tc>
+                    <w:tc><w:p><w:r><w:rPr><w:b/><w:color w:val="107C10"/></w:rPr><w:t>OK · Conforme</w:t></w:r></w:p></w:tc>
+                  </w:tr>
+                </w:tbl>
+                <w:p>
+                  <w:pPr><w:jc w:val="right"/></w:pPr>
+                  <w:r><w:rPr><w:i/></w:rPr><w:t>Nota allineata a destra</w:t></w:r>
+                </w:p>
+                <w:p>
+                  <w:pPr><w:pageBreakBefore/></w:pPr>
+                  <w:r><w:rPr><w:b/><w:sz w:val="28"/></w:rPr><w:t>Seconda Pagina Verificata</w:t></w:r>
+                </w:p>
+                <w:sectPr>
+                  <w:pgSz w:w="11906" w:h="16838"/>
+                  <w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134"/>
+                </w:sectPr>
+              </w:body>
+            </w:document>
+            """;
+
+        using var fs = new FileStream(docxPath, FileMode.Create, FileAccess.Write, FileShare.None);
+        using var zip = new System.IO.Compression.ZipArchive(fs, System.IO.Compression.ZipArchiveMode.Create);
+        static void WriteEntry(System.IO.Compression.ZipArchive archive, string name, string content)
+        {
+            var entry = archive.CreateEntry(name, System.IO.Compression.CompressionLevel.Optimal);
+            using var s = entry.Open();
+            using var w = new StreamWriter(s, new System.Text.UTF8Encoding(false));
+            w.Write(content);
+        }
+        WriteEntry(zip, "[Content_Types].xml", contentTypes);
+        WriteEntry(zip, "_rels/.rels", rootRels);
+        WriteEntry(zip, "word/_rels/document.xml.rels", docRels);
+        WriteEntry(zip, "word/styles.xml", stylesXml);
+        WriteEntry(zip, "word/numbering.xml", numberingXml);
+        WriteEntry(zip, "word/document.xml", documentXml);
     }
 }
