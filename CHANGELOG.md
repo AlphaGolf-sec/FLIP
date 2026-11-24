@@ -4,6 +4,18 @@ Tutte le novità principali del progetto **FLIP** sono documentate in questo fil
 
 ---
 
+## [0.6.2] - 2026-11-24 ("AURA Edition")
+
+### Added
+- **Built-in DOCX → PDF and DOCX → RTF with formatting.** When LibreOffice is not installed, FLIP now preserves styles, colors, headings, lists, tables and Unicode accents.
+
+### Fixed
+- **PDF/A-2b output.** Files now embed a valid sRGB ICC profile and a correct cross-reference table for ISO 19005-2b. This resolves the Adobe Acrobat/Reader message "A drawing error occurred".
+- **Wheel and routing.** PDF is always first on the primary ring for DOCX, DOC, ODT and RTF, next to a separate PDF/A entry. LibreOffice takes priority when installed. When it exports DOCX to PDF, the preset must not request metadata removal. The built-in exporter supports metadata removal.
+- **Command-line `--convert` for YAML, XML and CSV.** Conversions from these formats no longer fail with a `JsonElement` error. Thanks to [@giovamolinaro](https://github.com/giovamolinaro) for the original fix.
+- **YAML lists.** Nested lists and list items with several keys are no longer dropped. Invalid or unsupported YAML now reports an error instead of producing partial output.
+- **Leading zeros.** CSV values such as postal codes (`00123`), phone numbers (`0815551234`) and codes (`007`) stay text, in the wheel and on the command line. Values with a leading `+` (`+39081`) are also kept. `0`, `0.5`, `-0.25`, `42` and `-15` stay numbers. The same rule applies to XML, YAML and INI values.
+
 ## [0.6.1] - 2026-11-20 ("AURA Edition")
 
 - **DOCX → PDF.** FLIP usa LibreOffice per conservare l'impaginazione. Installa LibreOffice da **Impostazioni → Motori & GPU** se PDF non compare tra i formati. Questa conversione richiede un preset PDF senza rimozione metadati.

@@ -29,7 +29,7 @@ To add document conversions:
 .\scripts\Build.ps1 -DocumentEngine
 ```
 
-Pandoc is downloaded separately and its archive checksum is checked. LibreOffice is a separate optional installation, needed for rendering non-TXT documents to PDF/images. FLIP does not install it automatically. Basic image conversion does not need either tool.
+Pandoc is downloaded separately and its archive checksum is checked. LibreOffice is a separate optional installation. FLIP prefers it for rendering Word documents to PDF and needs it for legacy Office formats such as DOC. Without it, the built-in exporter converts DOCX to PDF and RTF. FLIP does not install it automatically. Basic image conversion does not need either tool.
 
 ## Everyday use
 

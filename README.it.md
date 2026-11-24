@@ -1,8 +1,8 @@
 [English](README.md) · **Italiano**
 
-# FLIP v0.6.1 — AURA Edition
+# FLIP v0.6.2 — AURA Edition
 
-![Versione](https://img.shields.io/badge/versione-v0.6.1%20AURA%20Edition-FF7A18?style=flat-square)
+![Versione](https://img.shields.io/badge/versione-v0.6.2%20AURA%20Edition-FF7A18?style=flat-square)
 ![Piattaforma](https://img.shields.io/badge/Windows-10%20%2F%2011%20x64-1A1C23?style=flat-square)
 [![Licenza](https://img.shields.io/badge/licenza-GPL--3.0--only-2ECC71?style=flat-square)](LICENSE)
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-Support-FFDD00?style=flat-square&logo=buymeacoffee&logoColor=000000)](https://www.buymeacoffee.com/1berimHY9M)
@@ -11,15 +11,15 @@ FLIP è un convertitore locale per Windows. Trascina uno o più file da Esplora 
 
 ![Ruota di conversione di FLIP](docs/assets/wheel.png)
 
-[Video dimostrativo](docs/assets/flip-demo.mp4) · [Note di rilascio della v0.6.1](https://github.com/thetinyfoundry/FLIP/releases/tag/v0.6.1) · [Registro delle modifiche](CHANGELOG.md) · [Guida Windows](docs/WINDOWS-INSTALL.md)
+[Video dimostrativo](docs/assets/flip-demo.mp4) · [Note di rilascio della v0.6.2](https://github.com/thetinyfoundry/FLIP/releases/tag/v0.6.2) · [Registro delle modifiche](CHANGELOG.md) · [Guida Windows](docs/WINDOWS-INSTALL.md)
 
-## Installa o aggiorna alla v0.6.1
+## Installa o aggiorna alla v0.6.2
 
 1. Installa il [.NET 10 Windows Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/10.0) su Windows 10 o 11 x64.
-2. Scarica [`Flip-0.6.1-win-x64.zip`](https://github.com/thetinyfoundry/FLIP/releases/download/v0.6.1/Flip-0.6.1-win-x64.zip) dalla [release v0.6.1](https://github.com/thetinyfoundry/FLIP/releases/tag/v0.6.1) ed estrai tutto l'archivio.
+2. Scarica [`Flip-0.6.2-win-x64.zip`](https://github.com/thetinyfoundry/FLIP/releases/download/v0.6.2/Flip-0.6.2-win-x64.zip) dalla [release v0.6.2](https://github.com/thetinyfoundry/FLIP/releases/tag/v0.6.2) ed estrai tutto l'archivio.
 3. Chiudi FLIP ed esegui `Installa-FLIP.cmd` dalla cartella estratta. Il programma di installazione verifica il pacchetto e lo copia in `%LOCALAPPDATA%\Programs\Flip`.
 
-**Usi già FLIP? Aggiorna tutti i file dell'app alla v0.6.1.** Avvia il programma di installazione dal nuovo archivio. Per un'installazione manuale, sostituisci l'intera cartella dell'app con il contenuto della nuova cartella `payload`. Tieni documenti e impostazioni separati dalla cartella dell'app.
+**Usi già FLIP? Aggiorna tutti i file dell'app alla v0.6.2.** Avvia il programma di installazione dal nuovo archivio. Per un'installazione manuale, sostituisci l'intera cartella dell'app con il contenuto della nuova cartella `payload`. Tieni documenti e impostazioni separati dalla cartella dell'app.
 
 Per disinstallare FLIP, esegui `Disinstalla-FLIP.cmd` dal pacchetto estratto.
 
@@ -55,6 +55,10 @@ dotnet run --project src/Flip/Flip.csproj -c Release --no-build -- --test-conver
 ```
 
 [Architettura](ARCHITECTURE.md) · [Come contribuire](CONTRIBUTING.md)
+
+## Contributi
+
+Grazie a [@AlphaGolf-sec](https://github.com/AlphaGolf-sec) per la correzione del secondo avvio nella v0.6.1 e a [@giovamolinaro](https://github.com/giovamolinaro) per la correzione YAML, XML e CSV nella v0.6.2.
 
 ## Supporto
 
