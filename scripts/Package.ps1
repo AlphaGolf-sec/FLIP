@@ -54,7 +54,8 @@ foreach ($file in $noticeFiles) {
 }
 
 # Esclusione rigorosa di simboli debug, collegamenti, log diagnostici e directory obj
-Get-ChildItem -LiteralPath $stage -Include *.pdb,*.lnk,events.jsonl -File -Recurse -Force | Remove-Item -Force
+# Windows PowerShell 5.1 ignora -Include insieme a -LiteralPath: il filtro deve stare in Where-Object.
+Get-ChildItem -LiteralPath $stage -File -Recurse -Force | Where-Object { $_.Extension -in @('.pdb','.lnk') -or $_.Name -eq 'events.jsonl' } | Remove-Item -Force
 Get-ChildItem -LiteralPath $stage -Directory -Recurse -Force | Where-Object { $_.Name -in @('logs','obj','evidence','package-tests') } | Remove-Item -Recurse -Force
 
 # Verifica privacy automatica su Flip.dll impacchettata (UTF-8 e UTF-16LE)
@@ -77,7 +78,7 @@ Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Installa-FLIP.cmd'),
     (Join-Path $PSScriptRoot 'Install-DocumentEngine.ps1') -Destination $stage
 Copy-Item -LiteralPath (Join-Path $root 'docs/INSTALL-PACKAGE.txt') -Destination (Join-Path $stage 'README.txt')
 
-$forbiddenLeft = @(Get-ChildItem -LiteralPath $stage -Include *.pdb,*.lnk,events.jsonl -File -Recurse -Force) +
+$forbiddenLeft = @(Get-ChildItem -LiteralPath $stage -File -Recurse -Force | Where-Object { $_.Extension -in @('.pdb','.lnk') -or $_.Name -eq 'events.jsonl' }) +
     @(Get-ChildItem -LiteralPath $stage -Directory -Recurse -Force | Where-Object { $_.Name -in @('logs','obj') })
 if ($forbiddenLeft.Count -gt 0) {
     throw 'Il pacchetto di staging contiene file o cartelle vietate (.pdb, .lnk, events.jsonl, logs/ o obj/).'
@@ -90,6 +91,15 @@ $manifest = @(Get-ChildItem $stage -Recurse -File | Sort-Object FullName | ForEa
 
 $zip = Join-Path $OutputRoot ($name + '.zip')
 if (Test-Path -LiteralPath $zip) { throw 'Archivio ZIP gia esistente; rifiuto la sovrascrittura.' }
-Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip
+# Compress-Archive in Windows PowerShell 5.1 scrive separatori '\' non conformi allo standard ZIP.
+Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+$archive = [IO.Compression.ZipFile]::Open($zip, [IO.Compression.ZipArchiveMode]::Create)
+try {
+    foreach ($file in (Get-ChildItem -LiteralPath $stage -File -Recurse -Force | Sort-Object FullName)) {
+        $entry = $file.FullName.Substring($stage.Length + 1).Replace('\','/')
+        [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $file.FullName, $entry, [IO.Compression.CompressionLevel]::Optimal) | Out-Null
+    }
+}
+finally { $archive.Dispose() }
 ((Get-FileHash $zip).Hash.ToLowerInvariant() + '  ' + (Split-Path $zip -Leaf)) | Set-Content ($zip + '.sha256') -Encoding ascii
 Write-Output ('Pacchetto pronto: ' + $zip)
